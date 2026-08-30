@@ -1,0 +1,41 @@
+# Discover a vendor marker (taint / annotation / label), then add it here.
+# No Eviction Guard rebuild is required.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: cloud-rotation
+spec:
+  disruptionSignals:
+    - KarpenterDisrupted
+    - KarpenterDeleteRequested
+    - OutOfService
+  customSignals:
+    # GKE host maintenance / GPU-TPU drain
+    - name: GKEImpendingTermination
+      taint:
+        key: cloud.google.com/impending-node-termination
+    - name: GKEMaintenanceOngoing
+      label:
+        key: cloud.google.com/active-node-maintenance
+        value: ONGOING
+    # AKS rolling upgrade quarantine
+    - name: AKSUpgradeQuarantined
+      label:
+        key: kubernetes.azure.com/upgrade-status
+        value: Quarantined
+    # Cluster Autoscaler (GKE/EKS/AKS when CA is in use)
+    - name: ClusterAutoscalerToBeDeleted
+      taint:
+        key: ToBeDeletedByClusterAutoscaler
+    - name: ClusterAutoscalerCandidate
+      taint:
+        key: DeletionCandidateOfClusterAutoscaler
+    # GKE scheduled maintenance window
+    - name: GKEMaintenanceWindow
+      taint:
+        key: cloud.google.com/maintenance-window-started
+  spareReplicas: 1
+  maxBuffer: 4
+  maxConcurrentWindows: 8
+  maxWindow: 2h
+  scaleBackAfter: 15m

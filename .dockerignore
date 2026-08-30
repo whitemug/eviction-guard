@@ -1,0 +1,8 @@
+.git
+.github
+bin
+cover.out
+*.md
+docs
+examples
+charts

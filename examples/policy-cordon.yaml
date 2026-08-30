@@ -1,0 +1,22 @@
+# Opt-in: treat kubectl cordon / drain (spec.unschedulable) as disruption.
+# Off the built-in defaults because a cordon is not always an eviction.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: cordon-watch
+spec:
+  nodeFilter:
+    # Narrow to the pool you actually drain, or every cordon in the cluster will scale.
+    labelSelector:
+      matchLabels:
+        karpenter.sh/nodepool: default
+  disruptionSignals:
+    - KarpenterDisrupted
+    - KarpenterDeleteRequested
+    - OutOfService
+    - NodeCordoned
+  spareReplicas: 1
+  maxBuffer: 4
+  maxConcurrentWindows: 8
+  maxWindow: 2h
+  scaleBackAfter: 15m

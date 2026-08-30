@@ -1,0 +1,37 @@
+# Opt a Deployment into Eviction Guard and give it a PDB.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+  labels:
+    eviction-guard.io/enabled: "true"
+  annotations:
+    eviction-guard.io/scale-backend: deployment
+    # or: deployment,hpa-min   — see examples/workload-multi-backend.yaml
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  namespace: default
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: web

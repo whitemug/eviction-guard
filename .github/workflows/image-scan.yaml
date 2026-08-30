@@ -1,0 +1,50 @@
+name: image-scan
+
+on:
+  workflow_call:
+  schedule:
+    # New CVEs land in distroless / Go without a code change.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: eviction-guard:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: eviction-guard:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - name: Trivy SARIF
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: eviction-guard:scan
+          format: sarif
+          output: trivy-results.sarif
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif

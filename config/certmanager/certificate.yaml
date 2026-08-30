@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: eviction-guard-webhook
+  namespace: eviction-guard-system
+spec:
+  secretName: eviction-guard-webhook-certs
+  dnsNames:
+    - eviction-guard-webhook.eviction-guard-system.svc
+    - eviction-guard-webhook.eviction-guard-system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: eviction-guard-selfsigned

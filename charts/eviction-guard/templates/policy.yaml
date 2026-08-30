@@ -1,0 +1,34 @@
+{{- if .Values.defaultPolicy.enabled }}
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: {{ .Values.defaultPolicy.name }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+spec:
+  nodeFilter:
+    {{- toYaml .Values.defaultPolicy.nodeFilter | nindent 4 }}
+  spareReplicas: {{ .Values.defaultPolicy.spareReplicas }}
+  maxBuffer: {{ .Values.defaultPolicy.maxBuffer }}
+  maxConcurrentWindows: {{ .Values.defaultPolicy.maxConcurrentWindows }}
+  maxWindow: {{ .Values.defaultPolicy.maxWindow }}
+  defaultBackend: {{ .Values.defaultPolicy.defaultBackend }}
+  {{- with .Values.defaultPolicy.additionalBackends }}
+  additionalBackends:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  scaleBackAfter: {{ .Values.defaultPolicy.scaleBackAfter }}
+  {{- with .Values.defaultPolicy.stamp }}
+  stamp:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  requirePDB: {{ .Values.defaultPolicy.requirePDB }}
+  {{- with .Values.defaultPolicy.disruptionSignals }}
+  disruptionSignals:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.defaultPolicy.customSignals }}
+  customSignals:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

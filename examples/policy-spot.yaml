@@ -1,0 +1,23 @@
+# Watch only Spot nodes. A second policy can cover on-demand independently.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: spot-workers
+spec:
+  nodeFilter:
+    capacityTypes:
+      - spot
+    excludeLabelSelector:
+      matchLabels:
+        eviction-guard.io/ignore: "true"
+  spareReplicas: 1
+  maxBuffer: 4
+  maxConcurrentWindows: 8
+  maxWindow: 2h
+  defaultBackend: deployment
+  scaleBackAfter: 15m
+  disruptionSignals:
+    - KarpenterDisrupted
+    - KarpenterDeleteRequested
+    - OutOfService
+    - SpotInterrupted

@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: eviction-guard-system
+resources:
+  - ../crd
+  - ../rbac
+  - ../manager
+  - ../webhook
+  - ../certmanager
+images:
+  - name: controller
+    newName: ghcr.io/whitemug/eviction-guard
+    newTag: latest
