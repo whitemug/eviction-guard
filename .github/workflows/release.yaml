@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.17.3
       - name: Package and push Helm chart
