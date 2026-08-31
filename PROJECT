@@ -20,7 +20,7 @@ resources:
     controller: true
     domain: eviction-guard.io
     group: eviction-guard.io
-    kind: ProactiveWindow
+    kind: EvictionGuardWindow
     path: github.com/whitemug/eviction-guard/api/v1alpha1
     version: v1alpha1
 version: "3"

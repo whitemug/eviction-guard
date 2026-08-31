@@ -1,9 +1,9 @@
 apiVersion: v2
 name: eviction-guard
-description: Proactive Kubernetes capacity for predicted node disruption. Other operators integrate via EvictionGuardPolicy (nodeFilter) and ProactiveWindow.
+description: Proactive Kubernetes capacity for predicted node disruption. Other operators integrate via EvictionGuardPolicy (nodeFilter) and EvictionGuardWindow.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.1.1
+appVersion: "0.1.1"
 keywords:
   - kubernetes
   - karpenter

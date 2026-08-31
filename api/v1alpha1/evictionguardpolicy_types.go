@@ -165,7 +165,7 @@ type EvictionGuardPolicySpec struct {
 	// +kubebuilder:validation:Minimum=0
 	MaxBuffer *int32 `json:"maxBuffer,omitempty"`
 
-	// MaxConcurrentWindows caps how many Open/Cooling/Held ProactiveWindows this
+	// MaxConcurrentWindows caps how many Open/Cooling/Held EvictionGuardWindows this
 	// policy may hold at once. At-risk workloads without a window wait until one
 	// closes (scale-back finished). Defaults to 8. Set 0 for unlimited.
 	// +kubebuilder:validation:Minimum=0
@@ -193,7 +193,7 @@ type EvictionGuardPolicySpec struct {
 
 	// Stamp writes the same visibility annotations onto every scaled object
 	// (Deployment, HPA, CR) so kubectl/GitOps/other operators can see baseline
-	// and scaled-to without watching ProactiveWindow. Off by default.
+	// and scaled-to without watching EvictionGuardWindow. Off by default.
 	// Workload annotation eviction-guard.io/stamp: "true"|"false" overrides Enabled.
 	Stamp StampSpec `json:"stamp,omitempty"`
 
@@ -217,7 +217,7 @@ type EvictionGuardPolicyStatus struct {
 	// VulnerableNodes is how many matched nodes currently carry a disruption signal.
 	VulnerableNodes int32 `json:"vulnerableNodes,omitempty"`
 
-	// ActiveWindows is how many Open/Cooling/Held ProactiveWindows this policy owns.
+	// ActiveWindows is how many Open/Cooling/Held EvictionGuardWindows this policy owns.
 	ActiveWindows int32 `json:"activeWindows,omitempty"`
 
 	// DeferredWorkloads is how many at-risk opted-in Deployments are waiting
@@ -238,7 +238,7 @@ type EvictionGuardPolicyStatus struct {
 
 // EvictionGuardPolicy configures which nodes to watch and how to protect opted-in workloads.
 // Multiple policies may coexist; each applies independently to the nodes its NodeFilter selects.
-// Other Kubernetes plugins integrate by creating policies (and optionally watching ProactiveWindow).
+// Other Kubernetes plugins integrate by creating policies (and optionally watching EvictionGuardWindow).
 type EvictionGuardPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

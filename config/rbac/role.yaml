@@ -53,7 +53,7 @@ rules:
   - eviction-guard.io
   resources:
   - evictionguardpolicies
-  - proactivewindows
+  - evictionguardwindows
   verbs:
   - create
   - delete
@@ -66,14 +66,14 @@ rules:
   - eviction-guard.io
   resources:
   - evictionguardpolicies/finalizers
-  - proactivewindows/finalizers
+  - evictionguardwindows/finalizers
   verbs:
   - update
 - apiGroups:
   - eviction-guard.io
   resources:
   - evictionguardpolicies/status
-  - proactivewindows/status
+  - evictionguardwindows/status
   verbs:
   - get
   - patch

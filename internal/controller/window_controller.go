@@ -58,9 +58,9 @@ func (r *WindowReconciler) now() time.Time {
 	return time.Now()
 }
 
-// +kubebuilder:rbac:groups=eviction-guard.io,resources=proactivewindows,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=eviction-guard.io,resources=proactivewindows/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=eviction-guard.io,resources=proactivewindows/finalizers,verbs=update
+// +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -68,7 +68,7 @@ func (r *WindowReconciler) now() time.Time {
 func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := r.Get(ctx, req.NamespacedName, win); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -224,7 +224,7 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return r.deleteClosedWindow(ctx, win)
 }
 
-func (r *WindowReconciler) deleteClosedWindow(ctx context.Context, win *egv1a1.ProactiveWindow) (ctrl.Result, error) {
+func (r *WindowReconciler) deleteClosedWindow(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(win, egv1a1.WindowFinalizer) {
 		patch := client.MergeFrom(win.DeepCopy())
 		controllerutil.RemoveFinalizer(win, egv1a1.WindowFinalizer)
@@ -238,7 +238,7 @@ func (r *WindowReconciler) deleteClosedWindow(ctx context.Context, win *egv1a1.P
 	return ctrl.Result{}, nil
 }
 
-func (r *WindowReconciler) stillVulnerable(ctx context.Context, win *egv1a1.ProactiveWindow, policy *egv1a1.EvictionGuardPolicy) ([]string, error) {
+func (r *WindowReconciler) stillVulnerable(ctx context.Context, win *egv1a1.EvictionGuardWindow, policy *egv1a1.EvictionGuardPolicy) ([]string, error) {
 	filter, err := filters.FromSpec(policy.Spec.NodeFilter)
 	if err != nil {
 		return nil, err
@@ -266,7 +266,7 @@ func (r *WindowReconciler) stillVulnerable(ctx context.Context, win *egv1a1.Proa
 	return still, nil
 }
 
-func (r *WindowReconciler) abortCooldown(ctx context.Context, win *egv1a1.ProactiveWindow, policy *egv1a1.EvictionGuardPolicy) error {
+func (r *WindowReconciler) abortCooldown(ctx context.Context, win *egv1a1.EvictionGuardWindow, policy *egv1a1.EvictionGuardPolicy) error {
 	if win.Spec.WindowUntil == nil {
 		return nil
 	}
@@ -282,7 +282,7 @@ func (r *WindowReconciler) abortCooldown(ctx context.Context, win *egv1a1.Proact
 	return stampCooldown(ctx, r.Client, policy, dep, win, time.Time{})
 }
 
-func (r *WindowReconciler) scaleFloor(ctx context.Context, win *egv1a1.ProactiveWindow) (int32, bool, error) {
+func (r *WindowReconciler) scaleFloor(ctx context.Context, win *egv1a1.EvictionGuardWindow) (int32, bool, error) {
 	floor := win.Spec.Baseline
 	hpa, err := r.hpaFor(ctx, win)
 	if err != nil {
@@ -302,7 +302,7 @@ func (r *WindowReconciler) scaleFloor(ctx context.Context, win *egv1a1.Proactive
 	return floor, false, nil
 }
 
-func (r *WindowReconciler) scaleBackAndUnfinalize(ctx context.Context, win *egv1a1.ProactiveWindow) (ctrl.Result, error) {
+func (r *WindowReconciler) scaleBackAndUnfinalize(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
 	if err := restoreActions(ctx, r.Client, win, win.Spec.Baseline); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
@@ -316,14 +316,14 @@ func (r *WindowReconciler) scaleBackAndUnfinalize(ctx context.Context, win *egv1
 	return ctrl.Result{}, nil
 }
 
-func (r *WindowReconciler) scaleBackAndClose(ctx context.Context, win *egv1a1.ProactiveWindow) (ctrl.Result, error) {
+func (r *WindowReconciler) scaleBackAndClose(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
 	if err := restoreActions(ctx, r.Client, win, win.Spec.Baseline); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
 	return r.scaleBackAndUnfinalize(ctx, win)
 }
 
-func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.ProactiveWindow, phase egv1a1.WindowPhase, msg string) error {
+func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.EvictionGuardWindow, phase egv1a1.WindowPhase, msg string) error {
 	ready, safe, err := r.spareCounts(ctx, win)
 	if err != nil {
 		return err
@@ -349,7 +349,7 @@ func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.Proactiv
 	return r.Status().Update(ctx, win)
 }
 
-func (r *WindowReconciler) hpaFor(ctx context.Context, win *egv1a1.ProactiveWindow) (*autoscalingv1.HorizontalPodAutoscaler, error) {
+func (r *WindowReconciler) hpaFor(ctx context.Context, win *egv1a1.EvictionGuardWindow) (*autoscalingv1.HorizontalPodAutoscaler, error) {
 	for _, a := range win.ScaleActions() {
 		if a.Backend != egv1a1.ScaleBackendHPAMin {
 			continue
@@ -392,7 +392,7 @@ func (r *WindowReconciler) hpaFor(ctx context.Context, win *egv1a1.ProactiveWind
 
 func (r *WindowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	mapNode := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-		list := &egv1a1.ProactiveWindowList{}
+		list := &egv1a1.EvictionGuardWindowList{}
 		if err := r.List(ctx, list); err != nil {
 			return nil
 		}
@@ -407,7 +407,7 @@ func (r *WindowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&egv1a1.ProactiveWindow{}).
+		For(&egv1a1.EvictionGuardWindow{}).
 		Watches(&corev1.Node{}, mapNode).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestsFromMapFunc(r.workloadToWindows)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.podToWindows)).
@@ -416,7 +416,7 @@ func (r *WindowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *WindowReconciler) hpaToWindows(ctx context.Context, obj client.Object) []reconcile.Request {
-	list := &egv1a1.ProactiveWindowList{}
+	list := &egv1a1.EvictionGuardWindowList{}
 	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}

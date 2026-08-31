@@ -13,7 +13,7 @@ import (
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 )
 
-func windowOpenedAt(win *egv1a1.ProactiveWindow) time.Time {
+func windowOpenedAt(win *egv1a1.EvictionGuardWindow) time.Time {
 	if win.Status.LastScaleTime != nil && !win.Status.LastScaleTime.IsZero() {
 		return win.Status.LastScaleTime.Time
 	}
@@ -23,7 +23,7 @@ func windowOpenedAt(win *egv1a1.ProactiveWindow) time.Time {
 	return time.Time{}
 }
 
-func maxWindowExceeded(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.ProactiveWindow, now time.Time) bool {
+func maxWindowExceeded(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.EvictionGuardWindow, now time.Time) bool {
 	if policy == nil || win == nil {
 		return false
 	}
@@ -38,7 +38,7 @@ func maxWindowExceeded(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.Proactive
 	return !now.Before(opened.Add(d))
 }
 
-func maxWindowRequeue(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.ProactiveWindow, now time.Time) time.Duration {
+func maxWindowRequeue(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.EvictionGuardWindow, now time.Time) time.Duration {
 	if policy == nil || win == nil {
 		return 0
 	}
@@ -57,7 +57,7 @@ func maxWindowRequeue(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.ProactiveW
 	return left
 }
 
-func holdMaxWindow(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.ProactiveWindow, now time.Time) bool {
+func holdMaxWindow(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.EvictionGuardWindow, now time.Time) bool {
 	if win == nil {
 		return false
 	}

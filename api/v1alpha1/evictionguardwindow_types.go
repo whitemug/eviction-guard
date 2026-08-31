@@ -70,8 +70,8 @@ type ScaleAction struct {
 	StampKeys []string `json:"stampKeys,omitempty"`
 }
 
-// ProactiveWindowSpec is the desired disruption-window record.
-type ProactiveWindowSpec struct {
+// EvictionGuardWindowSpec is the desired disruption-window record.
+type EvictionGuardWindowSpec struct {
 	// PolicyName is the EvictionGuardPolicy that opened this window.
 	// +kubebuilder:validation:MinLength=1
 	PolicyName string `json:"policyName"`
@@ -104,8 +104,8 @@ type ProactiveWindowSpec struct {
 	WindowUntil *metav1.Time `json:"windowUntil,omitempty"`
 }
 
-// ProactiveWindowStatus is observed by Eviction Guard and by other plugins.
-type ProactiveWindowStatus struct {
+// EvictionGuardWindowStatus is observed by Eviction Guard and by other plugins.
+type EvictionGuardWindowStatus struct {
 	Phase WindowPhase `json:"phase,omitempty"`
 
 	LastScaleTime *metav1.Time `json:"lastScaleTime,omitempty"`
@@ -142,30 +142,30 @@ type ProactiveWindowStatus struct {
 // +kubebuilder:printcolumn:name="Until",type=string,JSONPath=.spec.windowUntil
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 
-// ProactiveWindow records a temporary capacity increase for one workload under one policy.
+// EvictionGuardWindow records a temporary capacity increase for one workload under one policy.
 // Other Kubernetes plugins MAY watch this resource to observe (or compose with) Eviction Guard's actions.
-type ProactiveWindow struct {
+type EvictionGuardWindow struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ProactiveWindowSpec   `json:"spec,omitempty"`
-	Status ProactiveWindowStatus `json:"status,omitempty"`
+	Spec   EvictionGuardWindowSpec   `json:"spec,omitempty"`
+	Status EvictionGuardWindowStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// ProactiveWindowList contains a list of ProactiveWindow.
-type ProactiveWindowList struct {
+// EvictionGuardWindowList contains a list of EvictionGuardWindow.
+type EvictionGuardWindowList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ProactiveWindow `json:"items"`
+	Items           []EvictionGuardWindow `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&ProactiveWindow{}, &ProactiveWindowList{})
+	SchemeBuilder.Register(&EvictionGuardWindow{}, &EvictionGuardWindowList{})
 }
 
-func (w *ProactiveWindow) IsActive() bool {
+func (w *EvictionGuardWindow) IsActive() bool {
 	switch w.Status.Phase {
 	case WindowPhaseOpen, WindowPhaseCooling, WindowPhaseHeld, "":
 		return true
@@ -176,7 +176,7 @@ func (w *ProactiveWindow) IsActive() bool {
 
 // ScaleActions is spec.actions, or a single synthetic action for windows
 // created before multi-backend (spec.backend + spec.backendTarget).
-func (w *ProactiveWindow) ScaleActions() []ScaleAction {
+func (w *EvictionGuardWindow) ScaleActions() []ScaleAction {
 	if len(w.Spec.Actions) > 0 {
 		return w.Spec.Actions
 	}

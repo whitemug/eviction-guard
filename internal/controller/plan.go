@@ -119,7 +119,7 @@ func (p *scalePlan) actions(existing []egv1a1.ScaleAction) []egv1a1.ScaleAction 
 
 func (p *scalePlan) primary() scaleStep { return p.steps[0] }
 
-func restoreActions(ctx context.Context, c client.Client, win *egv1a1.ProactiveWindow, deployFloor int32) error {
+func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, deployFloor int32) error {
 	actions := backends.SortActionsForScaleDown(win.ScaleActions())
 	coord := hasBackend(actions, egv1a1.ScaleBackendDeployment) && hasBackend(actions, egv1a1.ScaleBackendHPAMin)
 	for _, a := range actions {
@@ -186,7 +186,7 @@ func backendLabel(dep *appsv1.Deployment, policy *egv1a1.EvictionGuardPolicy) st
 
 // stampCooldown writes or clears the window-until annotation on every scaled object.
 // A zero until deletes the key (Open again); a real time is written when Cooling starts.
-func stampCooldown(ctx context.Context, c client.Client, policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment, win *egv1a1.ProactiveWindow, until time.Time) error {
+func stampCooldown(ctx context.Context, c client.Client, policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment, win *egv1a1.EvictionGuardWindow, until time.Time) error {
 	st := resolveStamp(policy, dep)
 	if !st.enabled {
 		return nil

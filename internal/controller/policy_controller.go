@@ -67,8 +67,8 @@ func (r *PolicyReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardpolicies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardpolicies/finalizers,verbs=update
-// +kubebuilder:rbac:groups=eviction-guard.io,resources=proactivewindows,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=eviction-guard.io,resources=proactivewindows/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
@@ -229,7 +229,7 @@ func (r *PolicyReconciler) collectWorkloads(ctx context.Context, policy *egv1a1.
 }
 
 func (r *PolicyReconciler) hasActiveWindow(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, w *workloadState) (bool, error) {
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	err := r.Get(ctx, types.NamespacedName{
 		Namespace: w.deploy.Namespace,
 		Name:      WindowName(policy.Name, w.deploy.Namespace, w.deploy.Name),
@@ -254,7 +254,7 @@ func sortedWorkloadKeys(m map[string]*workloadState) []string {
 
 func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, w *workloadState) error {
 	winName := WindowName(policy.Name, w.deploy.Namespace, w.deploy.Name)
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	getErr := r.Get(ctx, types.NamespacedName{Namespace: w.deploy.Namespace, Name: winName}, win)
 	exists := getErr == nil
 	if !exists && !apierrors.IsNotFound(getErr) {
@@ -291,7 +291,7 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 	primaryAction := scaleAction(prim.backend, prim.target, prim.baseline, prim.desired, prim.stampKeys)
 
 	if !exists {
-		win = &egv1a1.ProactiveWindow{
+		win = &egv1a1.EvictionGuardWindow{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      winName,
 				Namespace: w.deploy.Namespace,
@@ -301,7 +301,7 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 					egv1a1.WorkloadNamespaceLabel: w.deploy.Namespace,
 				},
 			},
-			Spec: egv1a1.ProactiveWindowSpec{
+			Spec: egv1a1.EvictionGuardWindowSpec{
 				PolicyName:      policy.Name,
 				Target:          workloadRef(w.deploy),
 				Backend:         primaryAction.Backend,
@@ -355,7 +355,7 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 }
 
 func (r *PolicyReconciler) syncClearedWindows(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, active map[string]*workloadState) error {
-	list := &egv1a1.ProactiveWindowList{}
+	list := &egv1a1.EvictionGuardWindowList{}
 	if err := r.List(ctx, list, client.MatchingLabels{egv1a1.PolicyLabel: policy.Name}); err != nil {
 		return err
 	}
@@ -378,7 +378,7 @@ func (r *PolicyReconciler) syncClearedWindows(ctx context.Context, policy *egv1a
 }
 
 func (r *PolicyReconciler) countActiveWindows(ctx context.Context, policy *egv1a1.EvictionGuardPolicy) (int32, error) {
-	list := &egv1a1.ProactiveWindowList{}
+	list := &egv1a1.EvictionGuardWindowList{}
 	if err := r.List(ctx, list, client.MatchingLabels{egv1a1.PolicyLabel: policy.Name}); err != nil {
 		return 0, err
 	}
@@ -392,7 +392,7 @@ func (r *PolicyReconciler) countActiveWindows(ctx context.Context, policy *egv1a
 }
 
 func (r *PolicyReconciler) cleanup(ctx context.Context, policy *egv1a1.EvictionGuardPolicy) (ctrl.Result, error) {
-	list := &egv1a1.ProactiveWindowList{}
+	list := &egv1a1.EvictionGuardWindowList{}
 	if err := r.List(ctx, list, client.MatchingLabels{egv1a1.PolicyLabel: policy.Name}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -571,7 +571,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&egv1a1.EvictionGuardPolicy{}).
-		Owns(&egv1a1.ProactiveWindow{}).
+		Owns(&egv1a1.EvictionGuardWindow{}).
 		Watches(&corev1.Node{}, nodePolicyHandler{Client: r.Client}, builder.WithPredicates(nodeDisruptionPredicate())).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.mapPodToPolicies), builder.WithPredicates(podPolicyPredicate())).
 		Complete(r)

@@ -146,7 +146,7 @@ func TestScaleUpSpareReadyScaleBack(t *testing.T) {
 		if got.Spec.Replicas == nil || *got.Spec.Replicas != 4 {
 			return fmt.Errorf("replicas=%v, want 4", got.Spec.Replicas)
 		}
-		win := &egv1a1.ProactiveWindow{}
+		win := &egv1a1.EvictionGuardWindow{}
 		if err := k8sClient.Get(ctx, winName, win); err != nil {
 			return err
 		}
@@ -166,7 +166,7 @@ func TestScaleUpSpareReadyScaleBack(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		win := &egv1a1.ProactiveWindow{}
+		win := &egv1a1.EvictionGuardWindow{}
 		if err := k8sClient.Get(ctx, winName, win); err != nil {
 			t.Fatal(err)
 		}
@@ -201,7 +201,7 @@ func TestScaleUpSpareReadyScaleBack(t *testing.T) {
 	}
 
 	eventually(t, 15*time.Second, func(ctx context.Context) error {
-		win := &egv1a1.ProactiveWindow{}
+		win := &egv1a1.EvictionGuardWindow{}
 		if err := k8sClient.Get(ctx, winName, win); err != nil {
 			return err
 		}
@@ -225,7 +225,7 @@ func TestScaleUpSpareReadyScaleBack(t *testing.T) {
 		if got.Spec.Replicas == nil || *got.Spec.Replicas != 3 {
 			return fmt.Errorf("replicas=%v, want 3 after scale-back", got.Spec.Replicas)
 		}
-		win := &egv1a1.ProactiveWindow{}
+		win := &egv1a1.EvictionGuardWindow{}
 		err := k8sClient.Get(ctx, winName, win)
 		if client.IgnoreNotFound(err) != nil {
 			return err

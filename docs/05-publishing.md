@@ -25,6 +25,7 @@ What is already in the tree versus what you do on GitHub when you cut the first 
    That publishes:
    - Image `ghcr.io/whitemug/eviction-guard:0.1.0` (and the `0.1` minor tag)
    - Chart `oci://ghcr.io/whitemug/charts/eviction-guard:0.1.0`
+   The window CRD was renamed to `EvictionGuardWindow` after `v0.1.0`; the next tag must be `v0.1.1` (chart `version` / `appVersion` / `image.tag` already `0.1.1`). Do not retag `v0.1.0`.
    Both are signed with Cosign keyless (GitHub OIDC → Sigstore). Helm GPG `.prov` files are not used.
 4. First-time GHCR: make the `eviction-guard` and `charts/eviction-guard` packages **public** (Settings → Packages), or enable “Inherit access from source repository”.
 5. Optional: Artifact Hub listing, GitHub topics (`kubernetes`, `operator`, `karpenter`, `autoscaling`).

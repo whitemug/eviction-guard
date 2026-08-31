@@ -40,7 +40,7 @@ spec:
         description: |-
           EvictionGuardPolicy configures which nodes to watch and how to protect opted-in workloads.
           Multiple policies may coexist; each applies independently to the nodes its NodeFilter selects.
-          Other Kubernetes plugins integrate by creating policies (and optionally watching ProactiveWindow).
+          Other Kubernetes plugins integrate by creating policies (and optionally watching EvictionGuardWindow).
         properties:
           apiVersion:
             description: |-
@@ -181,7 +181,7 @@ spec:
                 type: integer
               maxConcurrentWindows:
                 description: |-
-                  MaxConcurrentWindows caps how many Open/Cooling/Held ProactiveWindows this
+                  MaxConcurrentWindows caps how many Open/Cooling/Held EvictionGuardWindows this
                   policy may hold at once. At-risk workloads without a window wait until one
                   closes (scale-back finished). Defaults to 8. Set 0 for unlimited.
                 format: int32
@@ -416,7 +416,7 @@ spec:
                 description: |-
                   Stamp writes the same visibility annotations onto every scaled object
                   (Deployment, HPA, CR) so kubectl/GitOps/other operators can see baseline
-                  and scaled-to without watching ProactiveWindow. Off by default.
+                  and scaled-to without watching EvictionGuardWindow. Off by default.
                   Workload annotation eviction-guard.io/stamp: "true"|"false" overrides Enabled.
                 properties:
                   activeKey:
@@ -496,7 +496,7 @@ spec:
               and other plugins.
             properties:
               activeWindows:
-                description: ActiveWindows is how many Open/Cooling/Held ProactiveWindows
+                description: ActiveWindows is how many Open/Cooling/Held EvictionGuardWindows
                   this policy owns.
                 format: int32
                 type: integer

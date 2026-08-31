@@ -13,7 +13,7 @@ const (
 	// EnabledLabel is the opt-in label for workloads. Value must be "true".
 	EnabledLabel = "eviction-guard.io/enabled"
 
-	// PolicyLabel is set on ProactiveWindow objects to identify the owning policy.
+	// PolicyLabel is set on EvictionGuardWindow objects to identify the owning policy.
 	PolicyLabel = "eviction-guard.io/policy"
 
 	// WorkloadNameLabel / WorkloadNamespaceLabel identify the scaled workload.
@@ -58,7 +58,7 @@ const (
 	StampActiveKey      = "eviction-guard.io/active"
 	StampWindowUntilKey = "eviction-guard.io/window-until"
 
-	// WindowFinalizer blocks ProactiveWindow deletion until capacity is restored.
+	// WindowFinalizer blocks EvictionGuardWindow deletion until capacity is restored.
 	WindowFinalizer = "eviction-guard.io/scale-back"
 
 	// PolicyFinalizer blocks EvictionGuardPolicy deletion until windows are cleaned up.
