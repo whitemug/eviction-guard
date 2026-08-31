@@ -1,0 +1,19 @@
+# Short cooldown so the kind loop can finish without waiting 15m.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: spot-workers
+spec:
+  nodeFilter:
+    capacityTypes:
+      - spot
+    excludeLabelSelector:
+      matchLabels:
+        eviction-guard.io/ignore: "true"
+  spareReplicas: 1
+  maxBuffer: 4
+  defaultBackend: deployment
+  scaleBackAfter: 10s
+  requirePDB: true
+  disruptionSignals:
+    - KarpenterDisrupted

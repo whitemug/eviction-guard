@@ -1,0 +1,329 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: proactivewindows.eviction-guard.io
+spec:
+  group: eviction-guard.io
+  names:
+    categories:
+    - eviction-guard
+    kind: ProactiveWindow
+    listKind: ProactiveWindowList
+    plural: proactivewindows
+    shortNames:
+    - egw
+    singular: proactivewindow
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.policyName
+      name: Policy
+      type: string
+    - jsonPath: .spec.backend
+      name: Backend
+      type: string
+    - jsonPath: .spec.baseline
+      name: Baseline
+      type: integer
+    - jsonPath: .spec.scaledTo
+      name: ScaledTo
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.spareReady
+      name: SpareReady
+      type: boolean
+    - jsonPath: .spec.windowUntil
+      name: Until
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ProactiveWindow records a temporary capacity increase for one workload under one policy.
+          Other Kubernetes plugins MAY watch this resource to observe (or compose with) Eviction Guard's actions.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ProactiveWindowSpec is the desired disruption-window record.
+            properties:
+              actions:
+                description: |-
+                  Actions is the full fan-out: Deployment and/or HPA and/or CR, each with its
+                  own baseline so scale-back restores every object independently.
+                items:
+                  description: ScaleAction is one object Eviction Guard patched for
+                    a window (Deployment, HPA, or CR).
+                  properties:
+                    apiVersion:
+                      type: string
+                    backend:
+                      description: ScaleBackendType is the capacity-mutation strategy
+                        Eviction Guard uses.
+                      enum:
+                      - deployment
+                      - hpa-min
+                      - crd
+                      type: string
+                    baseline:
+                      description: Baseline is this object's value before scale-up.
+                      format: int32
+                      type: integer
+                    fieldPath:
+                      description: FieldPath is used by the crd backend (default spec.replicas).
+                      type: string
+                    kind:
+                      type: string
+                    name:
+                      minLength: 1
+                      type: string
+                    namespace:
+                      type: string
+                    scaledTo:
+                      description: ScaledTo is the value Eviction Guard set on this
+                        object.
+                      format: int32
+                      type: integer
+                    stampKeys:
+                      description: StampKeys are annotation keys written onto the
+                        scaled object; scale-back deletes them.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: atomic
+                  required:
+                  - backend
+                  - baseline
+                  - name
+                  - scaledTo
+                  type: object
+                type: array
+              backend:
+                description: |-
+                  Backend is the primary scaling backend (first action). Kept for kubectl columns
+                  and older windows that have no spec.actions.
+                enum:
+                - deployment
+                - hpa-min
+                - crd
+                type: string
+              backendTarget:
+                description: BackendTarget, if set, is the object the primary backend
+                  patches.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              baseline:
+                description: Baseline is the primary backend's replica count before
+                  scale-up.
+                format: int32
+                type: integer
+              policyName:
+                description: PolicyName is the EvictionGuardPolicy that opened this
+                  window.
+                minLength: 1
+                type: string
+              scaledTo:
+                description: ScaledTo is the replica (or minReplicas) count Eviction
+                  Guard set.
+                format: int32
+                type: integer
+              target:
+                description: Target is the workload whose capacity was raised.
+                properties:
+                  apiVersion:
+                    description: APIVersion of the target (e.g. apps/v1).
+                    type: string
+                  kind:
+                    description: Kind of the target (e.g. Deployment).
+                    type: string
+                  name:
+                    description: Name of the target.
+                    type: string
+                  namespace:
+                    description: Namespace of the target.
+                    type: string
+                required:
+                - apiVersion
+                - kind
+                - name
+                - namespace
+                type: object
+              vulnerableNodes:
+                description: VulnerableNodes are the node names that triggered this
+                  window.
+                items:
+                  type: string
+                type: array
+              windowUntil:
+                description: |-
+                  WindowUntil is when scale-back becomes eligible. Set only after vulnerable
+                  nodes have cleared and status.spareReady is true (Cooling). Empty while Open.
+                format: date-time
+                type: string
+            required:
+            - backend
+            - baseline
+            - policyName
+            - scaledTo
+            - target
+            type: object
+          status:
+            description: ProactiveWindowStatus is observed by Eviction Guard and by
+              other plugins.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              forcedCool:
+                description: |-
+                  ForcedCool is true when cooldown started because maxWindow elapsed, not
+                  because nodes cleared. The Closed object is kept as a tombstone until
+                  those nodes are no longer vulnerable so the same disruption cannot reopen.
+                type: boolean
+              lastScaleTime:
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable reason for the current phase.
+                type: string
+              phase:
+                description: WindowPhase is the lifecycle of a disruption window.
+                enum:
+                - Open
+                - Cooling
+                - Held
+                - Closed
+                type: string
+              readyReplicas:
+                description: ReadyReplicas is the Deployment's current Ready pod count.
+                format: int32
+                type: integer
+              safeReadyReplicas:
+                description: SafeReadyReplicas is Ready pods whose node is not in
+                  Spec.VulnerableNodes.
+                format: int32
+                type: integer
+              spareReady:
+                description: SpareReady is true when SafeReadyReplicas >= Spec.Baseline.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

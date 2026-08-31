@@ -41,7 +41,7 @@ Throughout this document, **Eviction Guard** is abbreviated **EVG**.
    (expireAfter, drift,   │  annotate vulnerable node               │
     consolidation)        │                                          │
                         ┌─▼────────────────────────────────────────┐ │
-                        │     EVG Controller / CronJob             │ │
+                        │     EVG controllers                      │ │
                         │                                          │ │
    Cloud notices ──►    │  1. Enumerate vulnerable nodes           │ │
    (Spot interrupt,     │  2. Map vulnerable node ──► Deployments  │ │
@@ -58,31 +58,18 @@ Throughout this document, **Eviction Guard** is abbreviated **EVG**.
                               └────────────────────┘
 ```
 
-### 3.1 Control Plane: Controller vs. CronJob
+### 3.1 Control plane
 
-This is a deliberate design decision. Both are viable; the choice depends on how you want to react.
+The shipping implementation is two `controller-runtime` reconcilers (Policy + Window) that watch Nodes and persist state on `ProactiveWindow`. `EvictionGuardPolicy.spec.nodeFilter` is how operators and other plugins restrict which nodes are watched. `spec.customSignals` is how they add newly discovered cloud markers without a rebuild.
 
-| Dimension | **CronJob** (polling) | **Controller** (event/watch) |
-|---|---|---|
-| Reactivity | Poll interval latency (e.g. 1–5 min) | Near-instant on signal |
-| Disruption signal source | Works well with *labels/taints* written ahead of time | Works well with *events/API watches* (Spot termination, Karpenter claim deletion) |
-| Cloud notice handling | Must poll for notices (Spot termination has ~2 min) | Native watch / webhook; better fit for tight windows |
-| Scale-back | Natural fit — run as a scheduled job with a cooldown check | Needs an in-memory/timeline state, plus an idle timer |
-| Operational complexity | Low (native Kubernetes primitive) | Higher (long-running pod, RBAC, watch logic) |
-| Failure mode | A missed run = no action, safe | A crash = state loss unless persisted |
-
-**Recommendation:**
-- **Adopt a Controller** for production when you need tight windows (Spot: ~120s) and want native signal watching + reliable scale-back state.
-- **Adopt a CronJob first** for a low-complexity MVP that proves the concept, especially if your disruption signals are written as *node labels/taints* by Karpenter ahead of the actual eviction (giving you a comfortable polling window).
-
-This document describes the **CronJob MVP** in detail and notes where the **Controller** extends it.
+A CronJob was considered for an early MVP and is **not** shipped: Spot-class windows (~2 min) and reliable scale-back state need watches and a CRD, not a poll.
 
 ## 4. Detecting Vulnerable Nodes (G2)
 
 Two independent signal sources are combined. A node is treated as **"vulnerable"** if *any* of the following indicate an imminent eviction:
 
 ### 4.1 Karpenter signals
-Karpenter writes signals on the node object that a CronJob can poll:
+Karpenter writes signals on the node object that the Policy controller watches:
 - **`karpenter.sh/do-not-disrupt: "true"`** (annotation) — present during an ongoing disruption; a node about to be disrupted.
 - **Drift/expiration timestamps** — Karpenter schedules disruption; the node may carry the `karpenter.sh/disruption` label / `karpenter.sh/delete-requested-at` timestamp.
 - Node `Taints` — Karpenter adds `karpenter.sh/disrupted` (PreferNoSchedule / NoSchedule) when it begins draining a node.
@@ -118,7 +105,7 @@ Once a node is vulnerable, determine which Deployments run pods on it. Eviction 
 2. **Deployment has a PDB** — only protect workloads that declare a minimum availability (respected SIG; ensures we're not scaling everything).
 3. **Deployment is opted-in** to Eviction Guard via a label, e.g.:
    ```
-   kubernetes.io/eviction-guard: "enabled"
+   eviction-guard.io/enabled: "true"
    ```
    This prevents Eviction Guard from scaling arbitrary system workloads.
 
@@ -173,7 +160,9 @@ target_capacity = current_capacity + spare      (Section 6)
 
 ```
 eviction-guard.io/scale-backend: deployment | hpa-min | crd | custom
-eviction-guard.io/scale-target:  <namespace/name of the object to act on>
+                                 (comma-separated list: deployment,hpa-min,crd)
+eviction-guard.io/hpa-target:    <namespace/name of the HPA>
+eviction-guard.io/scale-target:  <CR: group/version/namespaces/ns/kind/name>
 ```
 
 ### 7.2 Backend: `deployment` (default)
@@ -213,8 +202,9 @@ patch <CustomResource>/<name>  {"spec": {"replicas": <current+spare>}}
 
 Behavior:
 - Eviction Guard writes the *desired total* into the CR's `spec`.
+- Optionally stamps visibility annotations on every scaled object (`spec.stamp` / `eviction-guard.io/stamp`): baseline, scaled-to, and active at scale-up; window-until only when cooldown starts. Keys are configurable. Capacity backends never write these — stamps are a separate annotation patch.
 - Your operator watches the CR and reconciles actual capacity (Deployment, StatefulSet, Knative Revision, VirtualService weight, etc.).
-- Scale-back: Eviction Guard restores the CR field to baseline; your operator does the actual drain.
+- Scale-back: Eviction Guard restores the CR field to baseline and deletes stamp annotations; your operator does the actual drain.
 
 > **Why useful:** decouples Eviction Guard from your scaling topology entirely. Ideal when capacity is defined by higher-level abstractions (serverless/Knative, a custom autoscaler, a service-mesh weighted backend) rather than a plain Deployment.
 
@@ -223,15 +213,20 @@ Behavior:
 - Default: `deployment`.
 - If the workload is HPA-managed and you want HPA to keep controlling the ceiling: `hpa-min`.
 - If you own an operator/CRO owning replication: `crd`.
-- Each backend MUST implement both `ScaleUp(delta)` and `ScaleDown(baseline)` so the window lifecycle (§8) is symmetric.
+- **Fan-out:** a workload may list more than one backend. `eviction-guard.io/scale-backend: deployment,hpa-min,crd` (or policy `additionalBackends`) patches all of them to the same desired count. Each object keeps its own baseline on `ProactiveWindow.spec.actions`. Scale-up order is deployment → hpa-min → crd; scale-down is hpa-min → deployment → crd so the HPA floor cannot fight replica restore. Use `eviction-guard.io/hpa-target` for the HPA and `eviction-guard.io/scale-target` for the CR.
+- Each backend MUST implement both `ScaleUp(desired)` and `ScaleDown(baseline)` so the window lifecycle (§8) is symmetric. Backends change capacity only; stamps are applied afterward.
 
 ### 7.6 Recording which backend was used
 
-Persisted window records (Section 9.3) store the backend + target so scale-back uses the identical path:
+Persisted `ProactiveWindow` records store every action so scale-back uses the identical path:
 
 ```json
 {"kind":"Deployment","ref":"app/web","backend":"deployment",
- "baseline":4,"scaledTo":6,"...":"..."}
+ "baseline":4,"scaledTo":6,
+ "actions":[
+   {"backend":"deployment","kind":"Deployment","name":"web","baseline":4,"scaledTo":6},
+   {"backend":"hpa-min","kind":"HorizontalPodAutoscaler","name":"web","baseline":2,"scaledTo":6}
+ ]}
 ```
 
 ## 8. Scale-Back (G3)
@@ -242,8 +237,8 @@ The hardest part. Eviction Guard must return replicas to baseline **without**:
 - Or leaving the cluster permanently over-provisioned (which would fight Karpenter's own consolidation).
 
 ### Design: a cleared "disruption window" + cooldown
-1. When the last vulnerable node clears (no longer marked vulnerable, or replacement nodes Ready), start a **cooldown timer** (e.g. `scaleBackAfter: 15m` in a `window` status object).
-2. On the next poll **after** the cooldown, verify:
+1. When the last vulnerable node clears **and** `status.spareReady` is true (enough Ready pods off those nodes), set `ProactiveWindow.spec.windowUntil` to `now + scaleBackAfter` (e.g. 15m). The field is empty while the window is Open.
+2. On the next reconcile **after** `windowUntil`, verify:
    - No vulnerable nodes remain for this workload.
    - The Deployment has not been scaled up independently by HPA since (compare `status.currentReplicas`).
    - The Deployment's request success / error rate (if metrics available) is healthy.
@@ -258,61 +253,29 @@ The hardest part. Eviction Guard must return replicas to baseline **without**:
 | No vulnerable nodes, cooldown elapsed, load healthy | Scale down toward baseline |
 | No vulnerable nodes, cooldown elapsed, load still high (HPA scaling up) | Hold; Eviction Guard's spare remains |
 | Vulnerable nodes still present | Wait (no scale-down) |
+| Nodes clear, spare not Ready off those nodes | Wait (Open; cooldown not started) |
 | New vulnerable node appears during cooldown | Reset cooldown |
 
-## 9. MVP (CronJob) Design
+## 9. Implementation
 
-A minimal, shippable implementation proving the concept.
+The shipping code is two reconcilers in `internal/controller`, started from `cmd/main.go`:
 
-### 9.1 Components
-- **CronJob** `evg-scan` — runs every `schedule` (e.g. `*/1 * * * *`).
-- Small script (Python or Go) using the Kubernetes client:
-  1. List nodes.
-  2. Compute `vulnerable` set (Section 4).
-  3. For each vulnerable node, gather Deployment objects on it (opt-in label + PDB check).
-  4. Compute target replicas (Strategy A or B).
-  5. Invoke the workload's **scaling backend** (Section 7) — `deployment`, `hpa-min`, or `crd` — to apply the delta.
-  6. Persist a `ConfigMap`/CRD record: workload, backend, pre-emptive target, timestamp, vulnerable-node count.
-- **RBAC** ServiceAccount allowing `list/watch` nodes & pods, and `update`/`patch` on the target kinds (Deployments, HPAs, CRs), scoped.
+- **Policy controller** — watches Nodes and Pods, applies `nodeFilter`, scales opted-in workloads, opens a `ProactiveWindow`.
+- **Window controller** — waits for `SpareReady` (Ready pods off vulnerable nodes), then cooldown, HPA-aware scale-back, closes the window.
 
-### 9.2 Scale-back via the same CronJob
-On every run, after the scale-up branch, Eviction Guard reads persisted records and runs the Section 8 scale-back logic **through the same backend used to scale up**.
+State lives on the `ProactiveWindow` CRD (not a ConfigMap). Install with Helm or Kustomize (`docs/03-install.md`). Add newly discovered cloud markers with `spec.customSignals` (`docs/04-extension.md`).
 
-### 9.3 Persistence
-A lightweight `ConfigMap` (or a small CRD `ProactiveWindow`) per workload records the disruption window and backend. Bare minimum fields:
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: evg-window
-data:
-  state: '{"deployments":[{"namespace":"app","name":"web","backend":"deployment","baseline":4,"scaledTo":6,"windowUntil":"2026-08-27T16:30:00Z","vulnNodes":["ip-10-0-1-5"]}]}'
-```
+## 10. Production notes
 
-### 9.4 MVP flow diagram
-
-```
-CronJob run
-   │
-   ├─ enumerate vulnerable nodes
-   ├─ map → opted-in Deployments with PDBs
-   ├─ for each: compute target, scale up, persist window
-   ├─ for each persisted window:
-   │     ├─ nodes still vulnerable?  ──► skip (wait)
-   │     ├─ cooldown elapsed?        ──► skip
-   │     ├─ HPA scaled up already?   ──► skip (don't fight)
-   │     └─ else scale back one step
-   └─ done
-```
-
-## 10. Controller Extension (production)
-
-For tight windows (Spot ~2 min) and reliable scale-back state, promote the design to a **Controller**:
-- Watch Karpenter `NodeClaim`/node events and cloud notices via watches/webhooks instead of polling.
-- Keep state in a proper CRD (`ProactiveWindow`) reconciled by the controller, so state survives restarts.
-- Register the scaling backends (Section 7) as first-class controller "actions" so new backends are added without touching core reconciliation.
-- Use leader election for HA across replicas.
-- Emit Kubernetes Events for auditability (scale-up/scale-back actions, backend used, window creation/close).
+- Leader election (on by default)
+- Kubernetes Events on scale-up / scale-back / SpareReady
+- Metrics `evg_matched_nodes`, `evg_vulnerable_nodes`, `evg_current_spare`, `evg_scale_actions_total`, `evg_spare_not_ready`
+- Extra RBAC (`extraClusterRoleRules`) when using the `crd` backend
+- Validating webhook (Helm default) for workload annotations and policy `namePattern`
+- `spec.maxConcurrentWindows` (default 8, `0` = unlimited) so one disruption wave cannot scale every opted-in Deployment at once; waiters get a slot after a window closes
+- `spec.maxWindow` (default 2h, `0` = unlimited) force-cools a window that stays Open too long (stuck taint / spare never Ready), then scales back and will not reopen until those nodes clear
+- Policy reconcile is enqueued for a **node** only when that node matches a policy `nodeFilter` (updates union old and new, so a node leaving a filter still reconciles)
+- Policy reconcile is enqueued for a pod only when that pod's node matches the policy `nodeFilter` and is currently vulnerable, and only when the pod is bound, relabeled, or deleted (Ready/status flips stay on the window controller)
 
 ## 11. Related Work & Design Inspiration
 
@@ -354,7 +317,7 @@ Cast AI ships a workload-aware rebalancer that "provisions replacement capacity 
 
 NTH watches EC2/ASG termination signals (Spot interruption, maintenance, ASG scale-in, AZ rebalance) and **cordon + drain**s before the instance dies. It is a *signal source + eviction* mechanism, not a scale-out mechanism. In Karpenter, Spot **Rebalance Recommendations** (10–20 min early warning) are delegated to NTH because Karpenter doesn't handle them natively.
 
-> **Inspiration for signals (Section 4):** NTH confirms the *two-mode* signal architecture — short notice (Spot interruption, ~2 min) vs. long notice (Rebalance recommendation, 10–20 min). Eviction Guard should treat these with different urgency: long notices allow a proactive scale-up comfortably; short notices favor a **controller** (event-driven) over a **CronJob** (polling) — reinforcing Section 3.1's recommendation.
+> **Inspiration for signals (Section 4):** NTH confirms the *two-mode* signal architecture — short notice (Spot interruption, ~2 min) vs. long notice (Rebalance recommendation, 10–20 min). Short notices are why Eviction Guard is a controller, not a poller.
 
 ### 11.6 Koordinator `koord-descheduler` CustomPriority
 
@@ -375,7 +338,7 @@ The classic trick: run **dummy buffer pods** (with a creator annotation) on-runa
 | Pre-warm replacement *before* terminating source | Karpenter disruption / Cast AI Rebalancer | Pre-scale replicas before eviction |
 | Time-boxed protection | `do-not-disrupt: 30m` | Cooldown + window-based scale-back |
 | Eviction API deletes-before-creates | Karpenter #1599 | Justifies growing replicas, not just rebudgeting |
-| Two signal cadences (short/long notice) | NTH, Karpenter Rebalance | Map to CronJob vs Controller choice |
+| Two signal cadences (short/long notice) | NTH, Karpenter Rebalance | Map urgency; short windows need a controller |
 | Buffer capacity on demand | `cluster-overprovisioner` | Event-triggered spare, not always-on |
 
 ## 12. Operational Considerations
@@ -384,24 +347,23 @@ The classic trick: run **dummy buffer pods** (with a creator annotation) on-runa
 - **Interop with HPA:** Eviction Guard only *raises* a floor and scales back to HPA's desired; it never acts as the sole scaling authority.
 - **Interop with Karpenter consolidation:** Eviction Guard's spares increase utilization briefly; Karpenter's `consolidationPolicy: WhenEmptyOrUnderutilized` will naturally reclaim the spare nodes after window close — that is desirable and expected.
 - **Idempotency:** scaling to the same target is a no-op; window records are keyed by `namespace/name`.
-- **Metrics & alerts:** expose a gauge for `pep_current_spare`, `pep_vulnerable_nodes`, and a counter `pep_scale_actions_total` to monitor behavior and confirm the mechanism fires (and scale-back returns).
+- **Metrics & alerts:** `evg_current_spare`, `evg_vulnerable_nodes`, `evg_matched_nodes`, `evg_scale_actions_total`.
 
-## 13. Scope / MVP Acceptance Criteria
+## 13. Acceptance criteria
 
-An MVP is successful when, in a test cluster under synthetic load:
+In a test cluster under synthetic load:
 
 1. A Karpenter `expireAfter` rotation on a node running an opted-in Deployment **does not** cause a measurable throughput/error-rate regression.
 2. Eviction Guard scales the Deployment up *before* the eviction lands (replacement pods Ready before old pod terminates).
 3. After rotation, replicas return to baseline automatically (cooldown + HPA-aware scale-back).
 4. A Deployment **not** opted-in shows no change (isolation confirmed).
 
-## 14. Open Questions / Follow-ups
+## 14. Out of scope for v1alpha1
 
-- Should Eviction Guard consider PVC-backed (stateful) workloads where scaling is constrained by storage topology?
-- Should Eviction Guard report/scale on **cost-optimization** signals (Karpenter `consolidation`) too, or only *capacity-preserving* disruption? (Consolidation is *price*-driven and may not need proactive spare capacity.)
-- Build out the exact incumbent-cloud notice integrations as a matrix (AWS / GCP / Azure) before writing the controller.
-- How should Eviction Guard coordinate when **Karpenter's own Spot/Rebalance delegation to NTH** is the trigger (Section 11.5)? Consider watching NTH's cordon/drain state as an additional signal.
+- PVC-backed / StatefulSet workloads where scaling is constrained by storage topology
+- Treating Karpenter **consolidation** (price-driven) the same as capacity-preserving disruption
+- A built-in NTH/cordon signal — configure it with `spec.customSignals` until it is widely used
 
 ---
 
-*Status: design draft — MVP (CronJob) specified; controller extension outlined.*
+*Status: v1alpha1 controller shipped (`cmd/main.go`, `internal/controller`, Helm + Kustomize).*

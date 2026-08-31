@@ -1,0 +1,94 @@
+{{- if .Values.webhook.enabled }}
+{{- $fullname := include "eviction-guard.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $svc := include "eviction-guard.webhookServiceName" . }}
+{{- $secretName := include "eviction-guard.webhookSecretName" . }}
+{{- $ca := genCA (printf "%s-ca" $fullname) 3650 }}
+{{- $altNames := list (printf "%s.%s.svc" $svc $ns) (printf "%s.%s.svc.cluster.local" $svc $ns) }}
+{{- $cert := genSignedCert $svc nil $altNames 3650 $ca }}
+{{- $tlsCrt := $cert.Cert | b64enc }}
+{{- $tlsKey := $cert.Key | b64enc }}
+{{- $caCrt := $ca.Cert | b64enc }}
+{{- $existing := lookup "v1" "Secret" $ns $secretName }}
+{{- if and $existing $existing.data }}
+{{- $tlsCrt = index $existing.data "tls.crt" }}
+{{- $tlsKey = index $existing.data "tls.key" }}
+{{- $caCrt = index $existing.data "ca.crt" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrt }}
+  tls.key: {{ $tlsKey }}
+  ca.crt: {{ $caCrt }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: https
+      port: 443
+      targetPort: webhook
+  selector:
+    app.kubernetes.io/name: {{ include "eviction-guard.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    control-plane: controller-manager
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+webhooks:
+  - name: vdeployment.eviction-guard.io
+    admissionReviewVersions: ["v1"]
+    clientConfig:
+      caBundle: {{ $caCrt }}
+      service:
+        name: {{ $svc }}
+        namespace: {{ $ns }}
+        path: /validate-apps-v1-deployment
+        port: 443
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    sideEffects: None
+    timeoutSeconds: 5
+    objectSelector:
+      matchLabels:
+        eviction-guard.io/enabled: "true"
+    rules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+        scope: Namespaced
+  - name: vegp.eviction-guard.io
+    admissionReviewVersions: ["v1"]
+    clientConfig:
+      caBundle: {{ $caCrt }}
+      service:
+        name: {{ $svc }}
+        namespace: {{ $ns }}
+        path: /validate-eviction-guard-io-v1alpha1-evictionguardpolicy
+        port: 443
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    sideEffects: None
+    timeoutSeconds: 5
+    rules:
+      - apiGroups: ["eviction-guard.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["evictionguardpolicies"]
+        scope: Cluster
+{{- end }}

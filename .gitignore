@@ -1,0 +1,14 @@
+bin/
+dist/
+cover.out
+coverage.html
+*.out
+*.test
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.tools/
+vendor/
+.env
+.env.*

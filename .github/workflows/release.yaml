@@ -1,0 +1,104 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@v6
+        id: push
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          image-ref: ghcr.io/${{ github.repository }}@${{ steps.push.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Package and push Helm chart
+        id: chart
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 - <<'PY'
+          import os, pathlib, re, sys
+          ver = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          chart = pathlib.Path("charts/eviction-guard/Chart.yaml").read_text()
+          values = pathlib.Path("charts/eviction-guard/values.yaml").read_text()
+
+          def field(text, key):
+              m = re.search(rf'^{key}:\s*"?([^"\n]+)"?', text, re.M)
+              if not m:
+                  sys.exit(f"missing {key}")
+              return m.group(1)
+
+          cv, av = field(chart, "version"), field(chart, "appVersion")
+          if cv != ver or av != ver:
+              sys.exit(f"Chart.yaml version={cv} appVersion={av} but tag is v{ver}")
+          m = re.search(r"(?m)^\s*tag:\s*\"([^\"]+)\"", values)
+          if not m or m.group(1) != ver:
+              sys.exit(f"values.yaml image.tag must be {ver!r}")
+          print(f"chart versions match {ver}")
+          PY
+          helm package charts/eviction-guard -d /tmp/chart
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          PUSH_OUT="$(helm push "/tmp/chart/eviction-guard-${VERSION}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts" 2>&1)"
+          echo "$PUSH_OUT"
+          DIGEST="$(echo "$PUSH_OUT" | sed -n 's/^Digest: //p' | tail -1)"
+          if [[ -z "$DIGEST" ]]; then
+            echo "helm push did not print a digest" >&2
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Sign chart
+        env:
+          DIGEST: ${{ steps.chart.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/eviction-guard@${DIGEST}"

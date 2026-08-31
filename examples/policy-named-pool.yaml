@@ -1,0 +1,25 @@
+# Watch an explicit subset of nodes (allow-list + glob).
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: named-pool
+spec:
+  nodeFilter:
+    names:
+      - ip-10-0-1-5
+      - ip-10-0-1-6
+    namePattern: "ip-10-0-*"
+    zones:
+      - us-east-1a
+    instanceTypes:
+      - m6i.large
+      - m6i.xlarge
+    labelSelector:
+      matchLabels:
+        karpenter.sh/nodepool: default
+  spareReplicas: 1
+  maxBuffer: 2
+  maxConcurrentWindows: 8
+  maxWindow: 2h
+  defaultBackend: hpa-min
+  scaleBackAfter: 10m

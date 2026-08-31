@@ -1,0 +1,5 @@
+# Generated / vendored
+api/v1alpha1/zz_generated.deepcopy.go linguist-generated=true
+config/crd/bases/*.yaml linguist-generated=true
+charts/eviction-guard/crds/*.yaml linguist-generated=true
+go.sum linguist-generated=true

@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "eviction-guard.fullname" . }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "eviction-guard.fullname" . }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["eviction-guard.io"]
+    resources: ["evictionguardpolicies", "proactivewindows"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["eviction-guard.io"]
+    resources: ["evictionguardpolicies/status", "proactivewindows/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["eviction-guard.io"]
+    resources: ["evictionguardpolicies/finalizers", "proactivewindows/finalizers"]
+    verbs: ["update"]
+  {{- with .Values.extraClusterRoleRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "eviction-guard.fullname" . }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "eviction-guard.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "eviction-guard.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "eviction-guard.fullname" . }}-leader-election
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "eviction-guard.fullname" . }}-leader-election
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "eviction-guard.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "eviction-guard.fullname" . }}
+    namespace: {{ .Release.Namespace }}

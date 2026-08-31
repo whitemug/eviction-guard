@@ -1,0 +1,15 @@
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: all-nodes
+spec:
+  # Empty nodeFilter watches every node. Narrow it to a pool, AZ, or instance type
+  # so other plugins / operators can compose multiple policies.
+  nodeFilter: {}
+  spareReplicas: 1
+  maxBuffer: 4
+  maxConcurrentWindows: 8
+  maxWindow: 2h
+  defaultBackend: deployment
+  scaleBackAfter: 15m
+  requirePDB: true
