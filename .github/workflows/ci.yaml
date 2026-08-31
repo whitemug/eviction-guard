@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27"
+          go-version-file: go.mod
           cache: true
       - uses: azure/setup-helm@v4
         with:
@@ -24,6 +24,10 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.13.2
+          # Prebuilt binaries may be compiled with an older Go than go.mod (1.27.0)
+          # and then load zero packages. Build the linter with the same toolchain.
+          install-mode: goinstall
+          args: ./...
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -40,6 +44,7 @@ jobs:
   image:
     uses: ./.github/workflows/image-scan.yaml
     permissions:
+      actions: read
       contents: read
       security-events: write
 

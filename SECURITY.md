@@ -27,5 +27,5 @@ Tagged images (`ghcr.io/whitemug/eviction-guard`) and Helm OCI charts (`ghcr.io/
 ## Scanning
 
 - **Go code:** `govulncheck ./...` on every PR.
-- **Container image:** Trivy on the image built from `Dockerfile` (`HIGH`/`CRITICAL`, ignore unfixed). The same scan runs on tagged releases (the pushed GHCR digest, before Cosign) and weekly on Mondays so new base-image CVEs show up without a code change. Results are uploaded to the GitHub **Security** tab (Code scanning).
+- **Container image:** Trivy on the image built from `Dockerfile` (`HIGH`/`CRITICAL`, ignore unfixed). The same scan runs on tagged releases (the pushed GHCR digest, before Cosign) and weekly on Mondays so new base-image CVEs show up without a code change. Findings are in the Actions log. Upload to the GitHub **Security** tab (Code scanning) runs only when the repository is **public**; a private repo needs [GitHub Advanced Security](https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security).
 - **Dependencies:** Dependabot watches `go.mod`, the Dockerfile, and GitHub Actions.

@@ -13,7 +13,7 @@ What is already in the tree versus what you do on GitHub when you cut the first 
 
 ## GitHub / release steps
 
-1. Make `whitemug/eviction-guard` **public**. Enable Issues, Discussions, Actions pushing to GHCR, and **Code scanning** / **Dependabot** (Settings → Code security).
+1. Make `whitemug/eviction-guard` **public**. Enable Issues, Discussions, Actions pushing to GHCR, and **Dependabot** (Settings → Code security). Code scanning (Trivy SARIF) is free once the repo is public; private repos need GitHub Advanced Security.
 2. Bump in lockstep with the git tag (the release job fails if they drift):
    - `charts/eviction-guard/Chart.yaml` `version` and `appVersion`
    - `charts/eviction-guard/values.yaml` `image.tag`
