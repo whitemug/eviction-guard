@@ -31,13 +31,13 @@ rules:
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["eviction-guard.io"]
-    resources: ["evictionguardpolicies", "proactivewindows"]
+    resources: ["evictionguardpolicies", "evictionguardwindows"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["eviction-guard.io"]
-    resources: ["evictionguardpolicies/status", "proactivewindows/status"]
+    resources: ["evictionguardpolicies/status", "evictionguardwindows/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["eviction-guard.io"]
-    resources: ["evictionguardpolicies/finalizers", "proactivewindows/finalizers"]
+    resources: ["evictionguardpolicies/finalizers", "evictionguardwindows/finalizers"]
     verbs: ["update"]
   {{- with .Values.extraClusterRoleRules }}
   {{- toYaml . | nindent 2 }}

@@ -60,7 +60,7 @@ Throughout this document, **Eviction Guard** is abbreviated **EVG**.
 
 ### 3.1 Control plane
 
-The shipping implementation is two `controller-runtime` reconcilers (Policy + Window) that watch Nodes and persist state on `ProactiveWindow`. `EvictionGuardPolicy.spec.nodeFilter` is how operators and other plugins restrict which nodes are watched. `spec.customSignals` is how they add newly discovered cloud markers without a rebuild.
+The shipping implementation is two `controller-runtime` reconcilers (Policy + Window) that watch Nodes and persist state on `EvictionGuardWindow`. `EvictionGuardPolicy.spec.nodeFilter` is how operators and other plugins restrict which nodes are watched. `spec.customSignals` is how they add newly discovered cloud markers without a rebuild.
 
 A CronJob was considered for an early MVP and is **not** shipped: Spot-class windows (~2 min) and reliable scale-back state need watches and a CRD, not a poll.
 
@@ -213,12 +213,12 @@ Behavior:
 - Default: `deployment`.
 - If the workload is HPA-managed and you want HPA to keep controlling the ceiling: `hpa-min`.
 - If you own an operator/CRO owning replication: `crd`.
-- **Fan-out:** a workload may list more than one backend. `eviction-guard.io/scale-backend: deployment,hpa-min,crd` (or policy `additionalBackends`) patches all of them to the same desired count. Each object keeps its own baseline on `ProactiveWindow.spec.actions`. Scale-up order is deployment → hpa-min → crd; scale-down is hpa-min → deployment → crd so the HPA floor cannot fight replica restore. Use `eviction-guard.io/hpa-target` for the HPA and `eviction-guard.io/scale-target` for the CR.
+- **Fan-out:** a workload may list more than one backend. `eviction-guard.io/scale-backend: deployment,hpa-min,crd` (or policy `additionalBackends`) patches all of them to the same desired count. Each object keeps its own baseline on `EvictionGuardWindow.spec.actions`. Scale-up order is deployment → hpa-min → crd; scale-down is hpa-min → deployment → crd so the HPA floor cannot fight replica restore. Use `eviction-guard.io/hpa-target` for the HPA and `eviction-guard.io/scale-target` for the CR.
 - Each backend MUST implement both `ScaleUp(desired)` and `ScaleDown(baseline)` so the window lifecycle (§8) is symmetric. Backends change capacity only; stamps are applied afterward.
 
 ### 7.6 Recording which backend was used
 
-Persisted `ProactiveWindow` records store every action so scale-back uses the identical path:
+Persisted `EvictionGuardWindow` records store every action so scale-back uses the identical path:
 
 ```json
 {"kind":"Deployment","ref":"app/web","backend":"deployment",
@@ -237,7 +237,7 @@ The hardest part. Eviction Guard must return replicas to baseline **without**:
 - Or leaving the cluster permanently over-provisioned (which would fight Karpenter's own consolidation).
 
 ### Design: a cleared "disruption window" + cooldown
-1. When the last vulnerable node clears **and** `status.spareReady` is true (enough Ready pods off those nodes), set `ProactiveWindow.spec.windowUntil` to `now + scaleBackAfter` (e.g. 15m). The field is empty while the window is Open.
+1. When the last vulnerable node clears **and** `status.spareReady` is true (enough Ready pods off those nodes), set `EvictionGuardWindow.spec.windowUntil` to `now + scaleBackAfter` (e.g. 15m). The field is empty while the window is Open.
 2. On the next reconcile **after** `windowUntil`, verify:
    - No vulnerable nodes remain for this workload.
    - The Deployment has not been scaled up independently by HPA since (compare `status.currentReplicas`).
@@ -260,10 +260,10 @@ The hardest part. Eviction Guard must return replicas to baseline **without**:
 
 The shipping code is two reconcilers in `internal/controller`, started from `cmd/main.go`:
 
-- **Policy controller** — watches Nodes and Pods, applies `nodeFilter`, scales opted-in workloads, opens a `ProactiveWindow`.
+- **Policy controller** — watches Nodes and Pods, applies `nodeFilter`, scales opted-in workloads, opens an `EvictionGuardWindow`.
 - **Window controller** — waits for `SpareReady` (Ready pods off vulnerable nodes), then cooldown, HPA-aware scale-back, closes the window.
 
-State lives on the `ProactiveWindow` CRD (not a ConfigMap). Install with Helm or Kustomize (`docs/03-install.md`). Add newly discovered cloud markers with `spec.customSignals` (`docs/04-extension.md`).
+State lives on the `EvictionGuardWindow` CRD (not a ConfigMap). Install with Helm or Kustomize (`docs/03-install.md`). Add newly discovered cloud markers with `spec.customSignals` (`docs/04-extension.md`).
 
 ## 10. Production notes
 

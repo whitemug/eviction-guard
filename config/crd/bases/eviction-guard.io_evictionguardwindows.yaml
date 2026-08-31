@@ -4,18 +4,18 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: proactivewindows.eviction-guard.io
+  name: evictionguardwindows.eviction-guard.io
 spec:
   group: eviction-guard.io
   names:
     categories:
     - eviction-guard
-    kind: ProactiveWindow
-    listKind: ProactiveWindowList
-    plural: proactivewindows
+    kind: EvictionGuardWindow
+    listKind: EvictionGuardWindowList
+    plural: evictionguardwindows
     shortNames:
     - egw
-    singular: proactivewindow
+    singular: evictionguardwindow
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -47,7 +47,7 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ProactiveWindow records a temporary capacity increase for one workload under one policy.
+          EvictionGuardWindow records a temporary capacity increase for one workload under one policy.
           Other Kubernetes plugins MAY watch this resource to observe (or compose with) Eviction Guard's actions.
         properties:
           apiVersion:
@@ -68,7 +68,8 @@ spec:
           metadata:
             type: object
           spec:
-            description: ProactiveWindowSpec is the desired disruption-window record.
+            description: EvictionGuardWindowSpec is the desired disruption-window
+              record.
             properties:
               actions:
                 description: |-
@@ -230,8 +231,8 @@ spec:
             - target
             type: object
           status:
-            description: ProactiveWindowStatus is observed by Eviction Guard and by
-              other plugins.
+            description: EvictionGuardWindowStatus is observed by Eviction Guard and
+              by other plugins.
             properties:
               conditions:
                 items:

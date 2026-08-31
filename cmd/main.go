@@ -89,7 +89,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("eviction-guard-window"),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ProactiveWindow")
+		setupLog.Error(err, "unable to create controller", "controller", "EvictionGuardWindow")
 		os.Exit(1)
 	}
 

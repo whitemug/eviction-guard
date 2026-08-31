@@ -8,7 +8,7 @@ Eviction Guard is complementary to Pod Disruption Budgets: PDBs keep a floor; th
 
 Two reconcilers:
 
-1. **Policy controller** — watches Nodes. For each `EvictionGuardPolicy`, it applies that policy's `nodeFilter`, detects disruption signals, maps at-risk pods to opted-in Deployments, scales via a pluggable backend, and opens a `ProactiveWindow`.
+1. **Policy controller** — watches Nodes. For each `EvictionGuardPolicy`, it applies that policy's `nodeFilter`, detects disruption signals, maps at-risk pods to opted-in Deployments, scales via a pluggable backend, and opens an `EvictionGuardWindow`.
 2. **Window controller** — waits until extra pods are **Ready off the dying node** (`status.spareReady`), then after `scaleBackAfter` restores capacity (never below what HPA is already running).
 
 ```
@@ -24,7 +24,7 @@ opted-in Deployment + PDB
 scale backend (deployment, hpa-min, and/or crd)
         │
         ▼
-ProactiveWindow  ── cooldown ──► scale back
+EvictionGuardWindow  ── cooldown ──► scale back
 ```
 
 ## Node filters
@@ -85,7 +85,7 @@ Published chart (tagged releases, Cosign-signed):
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.1.0 \
+  --version 0.1.1 \
   --namespace eviction-guard-system --create-namespace
 kubectl apply -f examples/policy-spot.yaml   # or your own EvictionGuardPolicy
 ```
@@ -111,7 +111,7 @@ Three layers, pick one:
 
 | Layer | Who it's for | What you do |
 |---|---|---|
-| **CRDs** | Any operator / GitOps / Helm chart | Apply `EvictionGuardPolicy` with a `nodeFilter`. Watch `ProactiveWindow` to observe actions. |
+| **CRDs** | Any operator / GitOps / Helm chart | Apply `EvictionGuardPolicy` with a `nodeFilter`. Watch `EvictionGuardWindow` to observe actions. |
 | **Workload annotations** | App charts | Set `eviction-guard.io/enabled` and optional `scale-backend: deployment,hpa-min` (or `crd`) so immediate replicas, the HPA floor, and/or *your* CR are updated together. |
 | **Go module** | Controllers compiled with this binary | `plugin.RegisterBackend` / `RegisterSignal` / `RegisterFilter`. |
 

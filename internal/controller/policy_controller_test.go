@@ -107,7 +107,7 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.ProactiveWindow{}).
+		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}).
 		WithIndex(&corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
 			n := o.(*corev1.Pod).Spec.NodeName
 			if n == "" {
@@ -162,7 +162,7 @@ func TestPolicyIgnoresNodesOutsideFilter(t *testing.T) {
 	if *dep.Spec.Replicas != 3 {
 		t.Fatalf("replicas=%d, want 3 (node filtered out)", *dep.Spec.Replicas)
 	}
-	list := &egv1a1.ProactiveWindowList{}
+	list := &egv1a1.EvictionGuardWindowList{}
 	if err := c.List(context.Background(), list); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestPolicyScalesUpMatchingVulnerableNode(t *testing.T) {
 		t.Fatalf("replicas=%d, want 4", *dep.Spec.Replicas)
 	}
 	winName := WindowName("spot-workers", "app", "web")
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestWindowScaleBackAfterCooldown(t *testing.T) {
 	}
 
 	winName := WindowName("spot-workers", "app", "web")
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestSpareReadyRequiresPodsOffVulnerableNode(t *testing.T) {
 	if _, err := wr.Reconcile(ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := c.Get(ctx, req.NamespacedName, win); err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestWindowWaitsForSpareReadyBeforeCooldown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := c.Get(ctx, winName, win); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestPolicyScalesDeploymentAndHPA(t *testing.T) {
 	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 4 {
 		t.Fatalf("hpa minReplicas=%v, want 4", hpa.Spec.MinReplicas)
 	}
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, win); err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestPolicyHonorsScaleBackAfterAnnotation(t *testing.T) {
 	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
 		t.Fatal(err)
 	}
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	winName := types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}
 	if err := c.Get(ctx, winName, win); err != nil {
 		t.Fatal(err)
@@ -731,7 +731,7 @@ func TestPolicyCapsNewWindows(t *testing.T) {
 	if *web.Spec.Replicas != 3 {
 		t.Fatalf("web replicas=%d, want 3 (deferred)", *web.Spec.Replicas)
 	}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, &egv1a1.ProactiveWindow{}); err == nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, &egv1a1.EvictionGuardWindow{}); err == nil {
 		t.Fatal("web should not have a window")
 	}
 	p := &egv1a1.EvictionGuardPolicy{}
@@ -802,7 +802,7 @@ func TestPolicyOpensNextWindowAfterSlotFrees(t *testing.T) {
 	if err := c.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-pod", Namespace: "app"}}); err != nil {
 		t.Fatal(err)
 	}
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	winNN := types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "api")}
 	if err := c.Get(ctx, winNN, win); err != nil {
 		t.Fatal(err)
@@ -882,7 +882,7 @@ func TestMaxWindowForceCoolsStuckOpen(t *testing.T) {
 	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: winNN}); err != nil {
 		t.Fatal(err)
 	}
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := c.Get(ctx, winNN, win); err != nil {
 		t.Fatal(err)
 	}
@@ -969,7 +969,7 @@ func TestMaxWindowZeroIsUnlimited(t *testing.T) {
 	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: winNN}); err != nil {
 		t.Fatal(err)
 	}
-	win := &egv1a1.ProactiveWindow{}
+	win := &egv1a1.EvictionGuardWindow{}
 	if err := c.Get(ctx, winNN, win); err != nil {
 		t.Fatal(err)
 	}

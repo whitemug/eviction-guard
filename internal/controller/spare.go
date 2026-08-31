@@ -24,7 +24,7 @@ import (
 )
 
 // spareCounts returns Ready pods and Ready pods not sitting on vulnerable nodes.
-func (r *WindowReconciler) spareCounts(ctx context.Context, win *egv1a1.ProactiveWindow) (ready, safe int32, err error) {
+func (r *WindowReconciler) spareCounts(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ready, safe int32, err error) {
 	if win.Spec.Target.Kind != "" && win.Spec.Target.Kind != "Deployment" {
 		return 0, 0, nil
 	}
@@ -70,7 +70,7 @@ func podReady(p *corev1.Pod) bool {
 	return false
 }
 
-func applySpareStatus(win *egv1a1.ProactiveWindow, ready, safe int32, now metav1.Time) (transitioned bool) {
+func applySpareStatus(win *egv1a1.EvictionGuardWindow, ready, safe int32, now metav1.Time) (transitioned bool) {
 	win.Status.ReadyReplicas = ready
 	win.Status.SafeReadyReplicas = safe
 	want := safe >= win.Spec.Baseline
@@ -100,7 +100,7 @@ func applySpareStatus(win *egv1a1.ProactiveWindow, ready, safe int32, now metav1
 }
 
 func (r *WindowReconciler) workloadToWindows(ctx context.Context, obj client.Object) []reconcile.Request {
-	list := &egv1a1.ProactiveWindowList{}
+	list := &egv1a1.EvictionGuardWindowList{}
 	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace()), client.MatchingLabels{
 		egv1a1.WorkloadNameLabel: obj.GetName(),
 	}); err != nil {
@@ -138,7 +138,7 @@ func (r *WindowReconciler) podToWindows(ctx context.Context, obj client.Object) 
 	if deployName == "" {
 		return nil
 	}
-	list := &egv1a1.ProactiveWindowList{}
+	list := &egv1a1.EvictionGuardWindowList{}
 	if err := r.List(ctx, list, client.InNamespace(pod.Namespace), client.MatchingLabels{
 		egv1a1.WorkloadNameLabel: deployName,
 	}); err != nil {

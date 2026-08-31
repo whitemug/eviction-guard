@@ -22,7 +22,7 @@ This is the path for most operators.
 
 `spec.maxConcurrentWindows` (default 8, `0` = unlimited) caps how many Open/Cooling/Held windows one policy may hold. Extra at-risk workloads wait until a window closes. `spec.maxWindow` (default 2h, `0` = unlimited) force-cools a window that stays Open too long.
 
-**Observe actions** by watching `ProactiveWindow` in the workload namespace:
+**Observe actions** by watching `EvictionGuardWindow` in the workload namespace:
 
 - `spec.baseline` / `spec.scaledTo` / `spec.backend` (primary / kubectl columns)
 - `spec.actions[]` — every object patched (Deployment, HPA, CR), each with its own baseline

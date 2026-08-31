@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/whitemug/eviction-guard
-  tag: "0.1.0"
+  tag: "0.1.1"
   pullPolicy: IfNotPresent
 
 replicaCount: 1

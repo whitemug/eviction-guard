@@ -18,8 +18,8 @@ import (
 
 func TestMaxWindowExceeded(t *testing.T) {
 	opened := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	win := &egv1a1.ProactiveWindow{
-		Status: egv1a1.ProactiveWindowStatus{LastScaleTime: &metav1.Time{Time: opened}},
+	win := &egv1a1.EvictionGuardWindow{
+		Status: egv1a1.EvictionGuardWindowStatus{LastScaleTime: &metav1.Time{Time: opened}},
 	}
 	def := &egv1a1.EvictionGuardPolicy{}
 	if maxWindowExceeded(def, win, opened.Add(time.Hour)) {
@@ -43,11 +43,11 @@ func TestMaxWindowExceeded(t *testing.T) {
 }
 
 func TestHoldMaxWindow(t *testing.T) {
-	win := &egv1a1.ProactiveWindow{Status: egv1a1.ProactiveWindowStatus{ForcedCool: true}}
+	win := &egv1a1.EvictionGuardWindow{Status: egv1a1.EvictionGuardWindowStatus{ForcedCool: true}}
 	if !holdMaxWindow(&egv1a1.EvictionGuardPolicy{}, win, time.Now()) {
 		t.Fatal("ForcedCool should hold")
 	}
-	closed := &egv1a1.ProactiveWindow{Status: egv1a1.ProactiveWindowStatus{Phase: egv1a1.WindowPhaseClosed}}
+	closed := &egv1a1.EvictionGuardWindow{Status: egv1a1.EvictionGuardWindowStatus{Phase: egv1a1.WindowPhaseClosed}}
 	if !holdMaxWindow(&egv1a1.EvictionGuardPolicy{}, closed, time.Now()) {
 		t.Fatal("Closed should hold")
 	}
