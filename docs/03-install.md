@@ -6,7 +6,7 @@ Eviction Guard runs as a manager Deployment with two reconcilers (Policy and Win
 
 - Kubernetes 1.27+ (built against client-go 1.32)
 - `kubectl`, and optionally Helm 3
-- Go 1.27+ only if you build from source
+- Go 1.27.0 only if you build from source (`go.mod` pins `go 1.27.0`)
 - Workloads opted in with `eviction-guard.io/enabled: "true"` and a PDB (unless `requirePDB: false`)
 
 ## Helm

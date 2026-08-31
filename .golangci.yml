@@ -11,6 +11,7 @@ linters:
     generated: lax
     paths:
       - zz_generated\\.deepcopy\\.go
+      - internal/controller/envtest
 
 formatters:
   enable:

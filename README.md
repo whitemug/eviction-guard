@@ -77,7 +77,7 @@ A matching PodDisruptionBudget is required unless the policy sets `requirePDB: f
 
 ## Install
 
-Building from source requires **Go 1.27+**.
+Building from source requires **Go 1.27.0** (see `go.mod`).
 
 **Helm (recommended)**
 

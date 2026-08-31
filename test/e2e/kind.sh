@@ -28,7 +28,7 @@ wait_ok() {
     sleep 2
   done
   echo "timeout waiting for: $desc" >&2
-  kubectl get deploy,po,egp,egw -A || true
+  kubectl get deploy,po,svc,endpoints,endpointslice,egp,egw -A || true
   return 1
 }
 
@@ -56,6 +56,17 @@ no_windows() {
   local n
   n="$(kubectl get egw -n default --no-headers 2>/dev/null | wc -l | tr -d ' ')"
   [[ "$n" == "0" ]]
+}
+
+# Must stay in bash: Ubuntu's /bin/sh is dash and does not implement [[.
+webhook_ready() {
+  local ip
+  ip="$(kubectl get endpoints -n eviction-guard-system eviction-guard-webhook -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
+  if [[ -n "$ip" ]]; then
+    return 0
+  fi
+  ip="$(kubectl get endpointslice -n eviction-guard-system -l kubernetes.io/service-name=eviction-guard-webhook -o jsonpath='{.items[0].endpoints[0].addresses[0]}' 2>/dev/null || true)"
+  [[ -n "$ip" ]]
 }
 
 cleanup() {
@@ -93,8 +104,7 @@ helm upgrade --install eviction-guard "$ROOT/charts/eviction-guard" \
 
 wait_ok "manager ready" 120 \
   kubectl wait --for=condition=available deploy -n eviction-guard-system -l control-plane=controller-manager --timeout=90s
-wait_ok "webhook endpoints" 60 \
-  sh -c 'ip=$(kubectl get endpoints -n eviction-guard-system eviction-guard-webhook -o jsonpath="{.subsets[0].addresses[0].ip}" 2>/dev/null); [[ -n "$ip" ]]'
+wait_ok "webhook endpoints" 60 webhook_ready
 
 echo "==> webhook rejects bad scale-backend"
 set +e

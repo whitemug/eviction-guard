@@ -69,7 +69,7 @@ lint: $(GOLANGCI_LINT) ## golangci-lint
 	$(GOLANGCI_LINT) run
 
 $(GOLANGCI_LINT): | localbin
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(LOCALBIN) $(GOLANGCI_LINT_VERSION)
+	GOBIN=$(LOCALBIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: govulncheck
 govulncheck: ## Scan Go modules for known vulnerabilities

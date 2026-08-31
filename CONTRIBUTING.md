@@ -4,7 +4,7 @@ Eviction Guard is intended as a small, composable Kubernetes controller. Changes
 
 ## Development
 
-Requires **Go 1.27+** on `PATH` (`go version` should print `go1.27`). An older toolchain fails with `invalid go version '1.23.0': must match format 1.23` when installing `controller-gen`. Override with `make test GO=/path/to/go1.27/bin/go`.
+Requires **Go 1.27.0** on `PATH` (`go version` should print `go1.27`). The module pins this in `go.mod` (`go 1.27.0`); CI reads that file and the Dockerfile uses `golang:1.27.0`. An older local `go` (1.18–1.20) fails with `invalid go version '1.23.0': must match format 1.23` — that is the *old binary* rejecting a modern `go.mod`, not this project using 1.23. Override with `make test GO=/path/to/go1.27/bin/go`.
 
 ```bash
 make test          # generate, manifests, fmt, vet, unit tests (fake client)
