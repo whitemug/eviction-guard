@@ -1,10 +1,17 @@
+{{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "eviction-guard.fullname" . }}
+  name: {{ include "eviction-guard.serviceAccountName" . }}
   labels:
     {{- include "eviction-guard.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
 ---
+{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -55,7 +62,7 @@ roleRef:
   name: {{ include "eviction-guard.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "eviction-guard.fullname" . }}
+    name: {{ include "eviction-guard.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -87,5 +94,5 @@ roleRef:
   name: {{ include "eviction-guard.fullname" . }}-leader-election
 subjects:
   - kind: ServiceAccount
-    name: {{ include "eviction-guard.fullname" . }}
+    name: {{ include "eviction-guard.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}

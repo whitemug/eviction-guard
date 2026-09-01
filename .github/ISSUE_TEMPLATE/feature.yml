@@ -1,0 +1,37 @@
+name: Feature request
+description: A new signal, backend, filter, or chart knob.
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prefer a `customSignals` recipe or a Helm `--set` over a new compiled API when that is enough. See [docs/04-extension.md](../../docs/04-extension.md) and [docs/06-signal-catalog.md](../../docs/06-signal-catalog.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you cannot do today, with a real cluster/cloud if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: CRD field, annotation, Helm value, or plugin interface. "I don't know yet" is fine.
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Where it belongs
+      options:
+        - Policy CRD / nodeFilter
+        - Workload annotation
+        - Built-in disruption signal
+        - customSignals recipe only (docs/example)
+        - Scale backend
+        - Helm / install
+        - Unsure
+    validations:
+      required: true

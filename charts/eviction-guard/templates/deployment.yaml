@@ -18,36 +18,57 @@ spec:
         {{- include "eviction-guard.labels" . | nindent 8 }}
         control-plane: controller-manager
     spec:
-      serviceAccountName: {{ include "eviction-guard.fullname" . }}
+      serviceAccountName: {{ include "eviction-guard.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      hostNetwork: {{ .Values.hostNetwork }}
       terminationGracePeriodSeconds: 10
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
       securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: manager
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.leaderElect }}
-            - --health-probe-bind-address=:8081
-            - --metrics-bind-address=:8080
+            - --health-probe-bind-address={{ .Values.healthProbe.bindAddress }}
+            - --metrics-bind-address={{ .Values.metrics.bindAddress }}
             {{- if .Values.webhook.enabled }}
             - --webhook-cert-dir=/tmp/k8s-webhook-server/serving-certs
             {{- end }}
           ports:
             - name: metrics
-              containerPort: 8080
+              containerPort: {{ .Values.metrics.port }}
             - name: health
-              containerPort: 8081
+              containerPort: {{ .Values.healthProbe.port }}
             {{- if .Values.webhook.enabled }}
             - name: webhook
               containerPort: 9443
             {{- end }}
+          {{- with .Values.securityContext }}
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

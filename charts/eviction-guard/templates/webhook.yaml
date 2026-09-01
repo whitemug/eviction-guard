@@ -3,9 +3,9 @@
 {{- $ns := .Release.Namespace }}
 {{- $svc := include "eviction-guard.webhookServiceName" . }}
 {{- $secretName := include "eviction-guard.webhookSecretName" . }}
-{{- $ca := genCA (printf "%s-ca" $fullname) 3650 }}
+{{- $ca := genCA (printf "%s-ca" $fullname) (int .Values.webhook.certDurationDays) }}
 {{- $altNames := list (printf "%s.%s.svc" $svc $ns) (printf "%s.%s.svc.cluster.local" $svc $ns) }}
-{{- $cert := genSignedCert $svc nil $altNames 3650 $ca }}
+{{- $cert := genSignedCert $svc nil $altNames (int .Values.webhook.certDurationDays) $ca }}
 {{- $tlsCrt := $cert.Cert | b64enc }}
 {{- $tlsKey := $cert.Key | b64enc }}
 {{- $caCrt := $ca.Cert | b64enc }}
@@ -59,10 +59,10 @@ webhooks:
         namespace: {{ $ns }}
         path: /validate-apps-v1-deployment
         port: 443
-    failurePolicy: Fail
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
     matchPolicy: Equivalent
     sideEffects: None
-    timeoutSeconds: 5
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
     objectSelector:
       matchLabels:
         eviction-guard.io/enabled: "true"
@@ -81,10 +81,10 @@ webhooks:
         namespace: {{ $ns }}
         path: /validate-eviction-guard-io-v1alpha1-evictionguardpolicy
         port: 443
-    failurePolicy: Fail
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
     matchPolicy: Equivalent
     sideEffects: None
-    timeoutSeconds: 5
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
     rules:
       - apiGroups: ["eviction-guard.io"]
         apiVersions: ["v1alpha1"]
