@@ -19,6 +19,14 @@
 {{- printf "%s-webhook-certs" (include "eviction-guard.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "eviction-guard.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "eviction-guard.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
 {{- define "eviction-guard.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/name: {{ include "eviction-guard.name" . }}

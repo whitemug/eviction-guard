@@ -12,3 +12,4 @@ coverage.html
 vendor/
 .env
 .env.*
+*.tgz

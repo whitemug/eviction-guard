@@ -2,6 +2,8 @@
 
 Eviction Guard is intended as a small, composable Kubernetes controller. Changes that help *other operators* integrate (CRD fields, `pkg/` APIs, node filters, backends) are especially welcome.
 
+Look for issues labeled [`good first issue`](https://github.com/whitemug/eviction-guard/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). A typical first PR is an example policy, a catalog entry, or a unit test next to `pkg/signals` / `pkg/filters` — not a new CRD field.
+
 ## Development
 
 Requires **Go 1.27.0** on `PATH` (`go version` should print `go1.27`). The module pins this in `go.mod` (`go 1.27.0`); CI reads that file and the Dockerfile uses `golang:1.27.0`. An older local `go` (1.18–1.20) fails with `invalid go version '1.23.0': must match format 1.23` — that is the *old binary* rejecting a modern `go.mod`, not this project using 1.23. Override with `make test GO=/path/to/go1.27/bin/go`.

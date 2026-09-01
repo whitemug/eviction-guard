@@ -15,6 +15,8 @@ metadata:
     app.kubernetes.io/name: eviction-guard
     control-plane: controller-manager
 spec:
+  # One replica is enough; leader election is already on (--leader-elect).
+  # Patch to 2 for HA. Helm: --set replicaCount=2 (see docs/03-install.md).
   replicas: 1
   selector:
     matchLabels:
@@ -29,6 +31,9 @@ spec:
       terminationGracePeriodSeconds: 10
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -48,6 +53,8 @@ spec:
               containerPort: 9443
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
             capabilities:
               drop: ["ALL"]
           livenessProbe:

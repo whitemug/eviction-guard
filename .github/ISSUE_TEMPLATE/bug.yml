@@ -1,0 +1,47 @@
+name: Bug report
+description: Something did not scale, scaled back too soon, or failed to install.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Security reports go through `SECURITY.md` in the repo root, not a public issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image / chart tag (for example 0.1.1) or git SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install
+      options:
+        - Helm (OCI chart)
+        - Helm (from this repo)
+        - Kustomize
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduce
+      description: Policy YAML, workload labels/annotations, and the node taint or annotation that fired.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / status
+      description: "`kubectl get egp,egw -A` and manager logs around the event."
+      render: text
