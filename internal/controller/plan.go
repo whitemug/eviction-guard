@@ -9,11 +9,13 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
@@ -31,7 +33,7 @@ type scalePlan struct {
 }
 
 type scaleStep struct {
-	backend   egv1a1.ScaleBackendType
+	key       string
 	target    backends.Target
 	baseline  int32
 	desired   int32
@@ -39,120 +41,225 @@ type scaleStep struct {
 	stampKeys []string
 }
 
-func buildPlan(ctx context.Context, c client.Client, policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment, atRisk int32, existing []egv1a1.ScaleAction) (*scalePlan, error) {
-	types, err := backendTypes(dep, policy)
+func buildPlan(ctx context.Context, c client.Client, policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment, atRisk int32, existing []egv1a1.ScaleAction, stickyBaseline int32) (*scalePlan, error) {
+	if policy == nil || len(policy.Spec.Backends) == 0 {
+		return nil, fmt.Errorf("policy.spec.backends is required")
+	}
+	bindings, err := backends.BindingsForWorkload(dep, policy)
 	if err != nil {
 		return nil, err
 	}
-	if len(types) == 0 {
-		return nil, fmt.Errorf("no scale backends configured")
+	resolved, err := backends.ResolveCatalog(dep, policy, bindings)
+	if err != nil {
+		return nil, err
 	}
-	types = backends.SortForScaleUp(types)
-
 	stamp := resolveStamp(policy, dep)
 	plan := &scalePlan{}
-	for i, bt := range types {
-		target, err := resolveActionTarget(dep, bt)
-		if err != nil {
-			return nil, err
+
+	if len(resolved) == 0 {
+		// All bound catalog entries are external (no path patches): Window + metrics only.
+		baseline := stickyBaseline
+		if baseline <= 0 {
+			baseline = deployReplicas(dep)
 		}
-		backend, err := backends.Get(bt)
-		if err != nil {
-			return nil, err
-		}
-		current, err := backend.Current(ctx, c, target)
+		plan.primaryBaseline = baseline
+		plan.desired = capacity.TargetReplicas(baseline, atRisk, policy.SpareReplicasOrDefault(), policy.MaxBufferOrDefault())
+		return plan, nil
+	}
+
+	for i, step := range resolved {
+		current, err := backends.Current(ctx, c, step.Target)
 		if err != nil {
 			return nil, err
 		}
 		baseline := current
-		if old := findAction(existing, bt, target); old != nil {
+		if old := findAction(existing, step.Key, step.Target); old != nil {
 			baseline = old.Baseline
 		}
 		if i == 0 {
 			plan.primaryBaseline = baseline
 			plan.desired = capacity.TargetReplicas(baseline, atRisk, policy.SpareReplicasOrDefault(), policy.MaxBufferOrDefault())
 		}
+		anns := stamp.values(baseline, plan.desired)
+		keys := stamp.keys()
+		for _, a := range step.Annotations {
+			if anns == nil {
+				anns = map[string]string{}
+			}
+			anns[a] = "true"
+			keys = append(keys, a)
+		}
 		plan.steps = append(plan.steps, scaleStep{
-			backend:   bt,
-			target:    target,
+			key:       step.Key,
+			target:    step.Target,
 			baseline:  baseline,
 			desired:   plan.desired,
-			stamp:     stamp.values(baseline, plan.desired),
-			stampKeys: stamp.keys(),
+			stamp:     anns,
+			stampKeys: uniqueStrings(keys),
 		})
 	}
 	return plan, nil
 }
 
+func deployReplicas(dep *appsv1.Deployment) int32 {
+	if dep != nil && dep.Spec.Replicas != nil {
+		return *dep.Spec.Replicas
+	}
+	return 1
+}
+
+func uniqueStrings(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName string) (bool, error) {
 	scaled := false
 	for _, s := range p.steps {
-		backend, err := backends.Get(s.backend)
+		current, err := backends.Current(ctx, c, s.target)
 		if err != nil {
-			return scaled, err
-		}
-		current, err := backend.Current(ctx, c, s.target)
-		if err != nil {
-			return scaled, err
+			return scaled, wrapBackendErr(s.target, err)
 		}
 		if current < s.desired {
-			if err := backend.ScaleUp(ctx, c, s.target, s.desired); err != nil {
-				return scaled, err
+			if err := backends.ScaleUp(ctx, c, s.target, s.desired); err != nil {
+				return scaled, wrapBackendErr(s.target, err)
 			}
-			metrics.ScaleActions.WithLabelValues(policyName, "up", string(s.backend), "ok").Inc()
+			metrics.ScaleActions.WithLabelValues(policyName, "up", metricBackend(s), "ok").Inc()
 			scaled = true
 		}
 		if err := backends.PatchAnnotations(ctx, c, s.target, s.stamp); err != nil {
-			return scaled, err
+			return scaled, wrapBackendErr(s.target, err)
 		}
 	}
 	return scaled, nil
 }
 
+// wrapBackendErr turns API Forbidden into a clear missing-RBAC error for catalog targets.
+func wrapBackendErr(t backends.Target, err error) error {
+	if err == nil {
+		return nil
+	}
+	if apierrors.IsForbidden(err) {
+		return &backendAccessError{Target: t, Err: err}
+	}
+	return fmt.Errorf("%s %s: %w", t.Kind, t.ObjectKey, err)
+}
+
+type backendAccessError struct {
+	Target backends.Target
+	Err    error
+}
+
+func (e *backendAccessError) Error() string {
+	return fmt.Sprintf(
+		"missing RBAC for %s %q (apiVersion=%s); grant get/list/watch/patch via Helm extraClusterRoleRules: %v",
+		e.Target.Kind, e.Target.ObjectKey, e.Target.APIVersion, e.Err,
+	)
+}
+
+func (e *backendAccessError) Unwrap() error { return e.Err }
+
+func isMissingBackendRBAC(err error) bool {
+	var e *backendAccessError
+	return errors.As(err, &e)
+}
+
+func metricBackend(s scaleStep) string {
+	if s.key != "" {
+		return s.key
+	}
+	return s.target.Kind
+}
+
 func (p *scalePlan) actions(existing []egv1a1.ScaleAction) []egv1a1.ScaleAction {
 	var next []egv1a1.ScaleAction
 	for _, s := range p.steps {
-		next = append(next, scaleAction(s.backend, s.target, s.baseline, s.desired, s.stampKeys))
+		next = append(next, scaleAction(s.key, s.target, s.baseline, s.desired, s.stampKeys))
+	}
+	if len(p.steps) == 0 {
+		// External-only: no capacity patches; do not keep stale actions from an older catalog.
+		return next
 	}
 	return mergeActions(existing, next)
 }
 
-func (p *scalePlan) primary() scaleStep { return p.steps[0] }
-
 func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, deployFloor int32) error {
-	actions := backends.SortActionsForScaleDown(win.ScaleActions())
-	coord := hasBackend(actions, egv1a1.ScaleBackendDeployment) && hasBackend(actions, egv1a1.ScaleBackendHPAMin)
+	// Preserve Spec.Actions order (workload binding order); do not re-sort by kind.
+	actions := win.ScaleActions()
+	coord := hasDeployAction(actions) && hasHPAMinAction(actions)
 	for _, a := range actions {
-		backend, err := backends.Get(a.Backend)
-		if err != nil {
-			return err
-		}
 		target := actionTarget(a)
 		if target.Namespace == "" {
 			target.Namespace = win.Namespace
 		}
-		current, err := backend.Current(ctx, c, target)
+		current, err := backends.Current(ctx, c, target)
 		if err != nil {
-			return err
+			return wrapBackendErr(target, err)
 		}
 		floor := a.Baseline
-		if a.Backend == egv1a1.ScaleBackendDeployment {
+		if isDeployAction(a) {
 			floor = deployFloor
 		}
 		if current > floor {
-			if a.Backend == egv1a1.ScaleBackendHPAMin && coord {
+			switch {
+			case isHPAMinAction(a) && coord:
 				if err := backends.RestoreMinReplicas(ctx, c, target, floor); err != nil {
-					return err
+					return wrapBackendErr(target, err)
 				}
-			} else if err := backend.ScaleDown(ctx, c, target, floor); err != nil {
-				return err
+			case isHPAMinAction(a):
+				if err := backends.ScaleDownMinReplicas(ctx, c, target, floor); err != nil {
+					return wrapBackendErr(target, err)
+				}
+			default:
+				if err := backends.ScaleDown(ctx, c, target, floor); err != nil {
+					return wrapBackendErr(target, err)
+				}
 			}
 		}
 		if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(a.StampKeys)); err != nil {
-			return err
+			return wrapBackendErr(target, err)
 		}
 	}
 	return nil
+}
+
+func hasDeployAction(actions []egv1a1.ScaleAction) bool {
+	for _, a := range actions {
+		if isDeployAction(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHPAMinAction(actions []egv1a1.ScaleAction) bool {
+	for _, a := range actions {
+		if isHPAMinAction(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDeployAction(a egv1a1.ScaleAction) bool {
+	return a.Kind == "Deployment"
+}
+
+// isHPAMinAction is the HPA floor path that must not fight status.currentReplicas (G4).
+// Other HPA fields (e.g. spec.maxReplicas) use the generic field patcher.
+func isHPAMinAction(a egv1a1.ScaleAction) bool {
+	if a.Kind != "HorizontalPodAutoscaler" {
+		return false
+	}
+	return a.FieldPath == "" || a.FieldPath == "spec.minReplicas"
 }
 
 func workloadDeployment(ctx context.Context, c client.Client, ns, name string) (*appsv1.Deployment, error) {
@@ -163,23 +270,14 @@ func workloadDeployment(ctx context.Context, c client.Client, ns, name string) (
 	return dep, nil
 }
 
-func backendTypes(dep *appsv1.Deployment, policy *egv1a1.EvictionGuardPolicy) ([]egv1a1.ScaleBackendType, error) {
-	if dep.Annotations != nil {
-		if v := dep.Annotations[egv1a1.ScaleBackendAnnotation]; v != "" {
-			return backends.ParseList(v)
-		}
-	}
-	return policy.BackendsOrDefault(), nil
-}
-
 func backendLabel(dep *appsv1.Deployment, policy *egv1a1.EvictionGuardPolicy) string {
-	types, err := backendTypes(dep, policy)
-	if err != nil || len(types) == 0 {
-		return string(policy.DefaultBackendOrDefault())
+	bindings, err := backends.BindingsForWorkload(dep, policy)
+	if err != nil || len(bindings) == 0 {
+		return "unknown"
 	}
-	parts := make([]string, len(types))
-	for i, t := range types {
-		parts[i] = string(t)
+	parts := make([]string, len(bindings))
+	for i, b := range bindings {
+		parts[i] = b.Key
 	}
 	return strings.Join(parts, ",")
 }

@@ -1,14 +1,16 @@
-# Opt a Deployment into Eviction Guard and give it a PDB.
+# Opt a Deployment into Eviction Guard via the protected pod label.
+# The pods/eviction webhook gates voluntary drain until a Ready spare exists,
+# then allows one at-risk pod at a time.
+#
+# scale-backend is required: list policy.spec.backends keys to patch.
+# Token order is patch order; the first key is the SpareReady primary.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: web
   namespace: default
-  labels:
-    eviction-guard.io/enabled: "true"
   annotations:
     eviction-guard.io/scale-backend: deployment
-    # or: deployment,hpa-min   — see examples/workload-multi-backend.yaml
 spec:
   replicas: 3
   selector:
@@ -18,20 +20,10 @@ spec:
     metadata:
       labels:
         app: web
+        eviction-guard.io/protected: "true"
     spec:
       containers:
         - name: web
           image: nginx:1.27
           ports:
             - containerPort: 80
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: web
-  namespace: default
-spec:
-  minAvailable: 2
-  selector:
-    matchLabels:
-      app: web

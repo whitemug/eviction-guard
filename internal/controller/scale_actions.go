@@ -8,91 +8,20 @@ See LICENSE in the project root for license information.
 package controller
 
 import (
-	"fmt"
 	"sort"
 	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/backends"
 )
 
-func resolveActionTarget(dep *appsv1.Deployment, backend egv1a1.ScaleBackendType) (backends.Target, error) {
-	ann := dep.Annotations
-	if ann == nil {
-		ann = map[string]string{}
-	}
-	switch backend {
-	case egv1a1.ScaleBackendDeployment:
-		return backends.Target{
-			ObjectKey:  client.ObjectKey{Namespace: dep.Namespace, Name: dep.Name},
-			APIVersion: "apps/v1",
-			Kind:       "Deployment",
-		}, nil
-	case egv1a1.ScaleBackendHPAMin:
-		t := backends.Target{
-			ObjectKey:  client.ObjectKey{Namespace: dep.Namespace, Name: dep.Name},
-			APIVersion: "autoscaling/v1",
-			Kind:       "HorizontalPodAutoscaler",
-		}
-		if raw := ann[egv1a1.HPATargetAnnotation]; raw != "" {
-			parsed, err := backends.ParseScaleTarget(raw, dep.Namespace)
-			if err != nil {
-				return backends.Target{}, err
-			}
-			t.Namespace = parsed.Namespace
-			t.Name = parsed.Name
-			return t, nil
-		}
-		if raw := ann[egv1a1.ScaleTargetAnnotation]; raw != "" {
-			parsed, err := backends.ParseScaleTarget(raw, dep.Namespace)
-			if err != nil {
-				return backends.Target{}, err
-			}
-			if parsed.Kind == "" {
-				t.Namespace = parsed.Namespace
-				t.Name = parsed.Name
-			}
-		}
-		return t, nil
-	case egv1a1.ScaleBackendCRD:
-		raw := ann[egv1a1.ScaleTargetAnnotation]
-		if raw == "" {
-			return backends.Target{}, fmt.Errorf("crd backend requires annotation %s", egv1a1.ScaleTargetAnnotation)
-		}
-		parsed, err := backends.ParseScaleTarget(raw, dep.Namespace)
-		if err != nil {
-			return backends.Target{}, err
-		}
-		if parsed.APIVersion == "" || parsed.Kind == "" {
-			return backends.Target{}, fmt.Errorf("crd backend %s must be group/version/namespaces/ns/kind/name", egv1a1.ScaleTargetAnnotation)
-		}
-		parsed.FieldPath = ann[egv1a1.CRDReplicasPathAnnotation]
-		return parsed, nil
-	default:
-		raw := ann[egv1a1.ScaleTargetAnnotation]
-		if raw == "" {
-			return backends.Target{}, fmt.Errorf("backend %q requires annotation %s", backend, egv1a1.ScaleTargetAnnotation)
-		}
-		parsed, err := backends.ParseScaleTarget(raw, dep.Namespace)
-		if err != nil {
-			return backends.Target{}, err
-		}
-		if parsed.APIVersion == "" || parsed.Kind == "" {
-			return backends.Target{}, fmt.Errorf("backend %q %s must be group/version/namespaces/ns/kind/name", backend, egv1a1.ScaleTargetAnnotation)
-		}
-		parsed.FieldPath = ann[egv1a1.CRDReplicasPathAnnotation]
-		return parsed, nil
-	}
-}
-
-func scaleAction(backend egv1a1.ScaleBackendType, t backends.Target, baseline, scaledTo int32, stampKeys []string) egv1a1.ScaleAction {
+func scaleAction(key string, t backends.Target, baseline, scaledTo int32, stampKeys []string) egv1a1.ScaleAction {
 	return egv1a1.ScaleAction{
-		Backend:    backend,
+		Key:        key,
 		APIVersion: t.APIVersion,
 		Kind:       t.Kind,
 		Namespace:  t.Namespace,
@@ -114,11 +43,14 @@ func actionTarget(a egv1a1.ScaleAction) backends.Target {
 }
 
 func actionKey(a egv1a1.ScaleAction) string {
-	return string(a.Backend) + "/" + a.APIVersion + "/" + a.Kind + "/" + a.Namespace + "/" + a.Name
+	if a.Key != "" {
+		return a.Key + "/" + a.Namespace + "/" + a.Name + "/" + a.FieldPath
+	}
+	return a.APIVersion + "/" + a.Kind + "/" + a.Namespace + "/" + a.Name + "/" + a.FieldPath
 }
 
-func findAction(actions []egv1a1.ScaleAction, backend egv1a1.ScaleBackendType, t backends.Target) *egv1a1.ScaleAction {
-	want := actionKey(scaleAction(backend, t, 0, 0, nil))
+func findAction(actions []egv1a1.ScaleAction, key string, t backends.Target) *egv1a1.ScaleAction {
+	want := actionKey(scaleAction(key, t, 0, 0, nil))
 	for i := range actions {
 		if actionKey(actions[i]) == want {
 			return &actions[i]
@@ -140,31 +72,6 @@ func mergeActions(existing, next []egv1a1.ScaleAction) []egv1a1.ScaleAction {
 		}
 	}
 	return out
-}
-
-func objectRef(t backends.Target) *corev1.ObjectReference {
-	return &corev1.ObjectReference{
-		APIVersion: t.APIVersion,
-		Kind:       t.Kind,
-		Namespace:  t.Namespace,
-		Name:       t.Name,
-	}
-}
-
-func primaryBackendRef(dep *appsv1.Deployment, a egv1a1.ScaleAction) *corev1.ObjectReference {
-	if a.Backend == egv1a1.ScaleBackendDeployment && a.Name == dep.Name && a.Namespace == dep.Namespace {
-		return nil
-	}
-	return objectRef(actionTarget(a))
-}
-
-func hasBackend(actions []egv1a1.ScaleAction, t egv1a1.ScaleBackendType) bool {
-	for _, a := range actions {
-		if a.Backend == t {
-			return true
-		}
-	}
-	return false
 }
 
 func scaleBackAfter(policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment) time.Duration {

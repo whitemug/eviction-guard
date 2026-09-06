@@ -1,0 +1,25 @@
+# Workload for KEDA demos. Set scale-backend to the ScaledObject catalog key
+# (and name if it differs from the Deployment name).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+  annotations:
+    eviction-guard.io/scale-backend: scaledobject=web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        eviction-guard.io/protected: "true"
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27
+          ports:
+            - containerPort: 80

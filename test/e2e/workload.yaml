@@ -1,0 +1,31 @@
+# E2E workload: same as examples/workload.yaml, plus a slow readiness probe so
+# SpareReady lags scale-up and pods/eviction deny-before-spare is deterministic.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+  annotations:
+    eviction-guard.io/scale-backend: deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        eviction-guard.io/protected: "true"
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 2

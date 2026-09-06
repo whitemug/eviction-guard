@@ -20,14 +20,24 @@ func TestWorkloadAnnotationsOK(t *testing.T) {
 		t.Fatal(err)
 	}
 	ann := map[string]string{
-		egv1a1.ScaleBackendAnnotation:    "deployment,hpa-min,crd",
-		egv1a1.HPATargetAnnotation:       "default/web",
-		egv1a1.ScaleTargetAnnotation:     "example.com/v1/namespaces/default/Widget/web",
-		egv1a1.ScaleBackAfterAnnotation:  "20m",
-		egv1a1.StampAnnotation:           "true",
-		egv1a1.CRDReplicasPathAnnotation: "spec.replicas",
+		egv1a1.ScaleBackendAnnotation:   "deployment,hpa=web,webapp=fireship",
+		egv1a1.ScaleBackAfterAnnotation: "20m",
+		egv1a1.StampAnnotation:          "true",
+		egv1a1.PolicyPinAnnotation:      "spot-workers",
 	}
 	if err := validate.WorkloadAnnotations("default", ann); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScaleBackendRequired(t *testing.T) {
+	if err := validate.ScaleBackendRequired(nil); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("err=%v", err)
+	}
+	if err := validate.ScaleBackendRequired(map[string]string{}); err == nil {
+		t.Fatal("expected required")
+	}
+	if err := validate.ScaleBackendRequired(map[string]string{egv1a1.ScaleBackendAnnotation: "deployment"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -39,9 +49,9 @@ func TestWorkloadAnnotationsReject(t *testing.T) {
 		want string
 	}{
 		{
-			name: "unknown backend",
-			ann:  map[string]string{egv1a1.ScaleBackendAnnotation: "nope"},
-			want: "unknown scale backend",
+			name: "empty backend key",
+			ann:  map[string]string{egv1a1.ScaleBackendAnnotation: "=foo"},
+			want: "empty scale-backend key",
 		},
 		{
 			name: "empty backend list",
@@ -59,32 +69,14 @@ func TestWorkloadAnnotationsReject(t *testing.T) {
 			want: "greater than 0",
 		},
 		{
-			name: "bad scale-target",
-			ann:  map[string]string{egv1a1.ScaleTargetAnnotation: "a/b/c"},
-			want: "scale-target",
-		},
-		{
-			name: "crd without target",
-			ann:  map[string]string{egv1a1.ScaleBackendAnnotation: "crd"},
-			want: "requires annotation",
-		},
-		{
-			name: "crd with short target",
-			ann: map[string]string{
-				egv1a1.ScaleBackendAnnotation: "crd",
-				egv1a1.ScaleTargetAnnotation:  "default/web",
-			},
-			want: "group/version/namespaces",
-		},
-		{
 			name: "bad stamp",
 			ann:  map[string]string{egv1a1.StampAnnotation: "yes"},
 			want: "true",
 		},
 		{
-			name: "bad hpa-target",
-			ann:  map[string]string{egv1a1.HPATargetAnnotation: "too/many/parts/here"},
-			want: "hpa-target",
+			name: "bad policy pin",
+			ann:  map[string]string{egv1a1.PolicyPinAnnotation: "Not A Label"},
+			want: "DNS-1123",
 		},
 	}
 	for _, tc := range cases {
@@ -100,20 +92,68 @@ func TestWorkloadAnnotationsReject(t *testing.T) {
 	}
 }
 
+func catalogBackends() map[string]egv1a1.BackendCatalogEntry {
+	return map[string]egv1a1.BackendCatalogEntry{
+		"deployment": {
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Patches:    []egv1a1.BackendPatch{{Path: "spec.replicas"}},
+		},
+		"hpa": {
+			APIVersion: "autoscaling/v1",
+			Kind:       "HorizontalPodAutoscaler",
+			Patches:    []egv1a1.BackendPatch{{Path: "spec.minReplicas"}},
+		},
+	}
+}
+
 func TestPolicyNamePattern(t *testing.T) {
 	ok := &egv1a1.EvictionGuardPolicy{Spec: egv1a1.EvictionGuardPolicySpec{
 		NodeFilter: egv1a1.NodeFilter{NamePattern: "ip-10-0-*"},
+		Backends:   catalogBackends(),
 	}}
 	if err := validate.Policy(ok); err != nil {
 		t.Fatal(err)
 	}
 	bad := &egv1a1.EvictionGuardPolicy{Spec: egv1a1.EvictionGuardPolicySpec{
 		NodeFilter: egv1a1.NodeFilter{NamePattern: "["},
+		Backends:   catalogBackends(),
 	}}
 	if err := validate.Policy(bad); err == nil {
 		t.Fatal("expected invalid glob")
 	}
-	if err := validate.Policy(&egv1a1.EvictionGuardPolicy{}); err != nil {
+	if err := validate.Policy(&egv1a1.EvictionGuardPolicy{}); err == nil || !strings.Contains(err.Error(), "backends") {
+		t.Fatalf("expected backends required, got %v", err)
+	}
+}
+
+func TestPolicyBackends(t *testing.T) {
+	p := &egv1a1.EvictionGuardPolicy{Spec: egv1a1.EvictionGuardPolicySpec{
+		Backends: map[string]egv1a1.BackendCatalogEntry{
+			"deployment": {
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Patches:    []egv1a1.BackendPatch{{Path: "spec.replicas"}},
+			},
+		},
+	}}
+	if err := validate.Policy(p); err != nil {
 		t.Fatal(err)
+	}
+	// Empty patches = external scaler entry (allowed).
+	p.Spec.Backends["scaledobject"] = egv1a1.BackendCatalogEntry{
+		APIVersion: "keda.sh/v1alpha1",
+		Kind:       "ScaledObject",
+	}
+	if err := validate.Policy(p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.Backends["bad"] = egv1a1.BackendCatalogEntry{
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Patches:    []egv1a1.BackendPatch{{}},
+	}
+	if err := validate.Policy(p); err == nil || !strings.Contains(err.Error(), "path or annotation") {
+		t.Fatalf("err=%v", err)
 	}
 }

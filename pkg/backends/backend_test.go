@@ -19,11 +19,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/backends"
 )
 
-func TestDeploymentScale(t *testing.T) {
+func TestFieldPatchDeployment(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = appsv1.AddToScheme(scheme)
 	replicas := int32(3)
@@ -32,14 +31,18 @@ func TestDeploymentScale(t *testing.T) {
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dep).Build()
-	b := &backends.DeploymentBackend{}
-	tgt := backends.Target{ObjectKey: client.ObjectKey{Namespace: "app", Name: "web"}}
+	tgt := backends.Target{
+		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		FieldPath:  "spec.replicas",
+	}
 
-	cur, err := b.Current(context.Background(), c, tgt)
+	cur, err := backends.Current(context.Background(), c, tgt)
 	if err != nil || cur != 3 {
 		t.Fatalf("Current=%d err=%v", cur, err)
 	}
-	if err := b.ScaleUp(context.Background(), c, tgt, 5); err != nil {
+	if err := backends.ScaleUp(context.Background(), c, tgt, 5); err != nil {
 		t.Fatal(err)
 	}
 	got := &appsv1.Deployment{}
@@ -60,14 +63,14 @@ func TestPatchAnnotationsOnDeployment(t *testing.T) {
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dep).Build()
-	b := &backends.DeploymentBackend{}
 	tgt := backends.Target{
 		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
 		APIVersion: "apps/v1",
 		Kind:       "Deployment",
+		FieldPath:  "spec.replicas",
 	}
 	ctx := context.Background()
-	if err := b.ScaleUp(ctx, c, tgt, 5); err != nil {
+	if err := backends.ScaleUp(ctx, c, tgt, 5); err != nil {
 		t.Fatal(err)
 	}
 	stamps := map[string]string{
@@ -85,7 +88,7 @@ func TestPatchAnnotationsOnDeployment(t *testing.T) {
 	if got.Annotations["eviction-guard.io/scaled-to"] != "5" || got.Annotations["eviction-guard.io/active"] != "true" {
 		t.Fatalf("annotations=%v", got.Annotations)
 	}
-	if err := b.ScaleDown(ctx, c, tgt, 3); err != nil {
+	if err := backends.ScaleDown(ctx, c, tgt, 3); err != nil {
 		t.Fatal(err)
 	}
 	if err := backends.PatchAnnotations(ctx, c, tgt, backends.StampDeletes([]string{
@@ -103,7 +106,7 @@ func TestPatchAnnotationsOnDeployment(t *testing.T) {
 	}
 }
 
-func TestHPAMinDoesNotScaleBelowCurrent(t *testing.T) {
+func TestScaleDownMinReplicasDoesNotGoBelowCurrent(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = autoscalingv1.AddToScheme(scheme)
 	min := int32(4)
@@ -113,9 +116,8 @@ func TestHPAMinDoesNotScaleBelowCurrent(t *testing.T) {
 		Status:     autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 6},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hpa).Build()
-	b := &backends.HPAMinBackend{}
 	tgt := backends.Target{ObjectKey: client.ObjectKey{Namespace: "app", Name: "web"}}
-	if err := b.ScaleDown(context.Background(), c, tgt, 3); err != nil {
+	if err := backends.ScaleDownMinReplicas(context.Background(), c, tgt, 3); err != nil {
 		t.Fatal(err)
 	}
 	got := &autoscalingv1.HorizontalPodAutoscaler{}
@@ -127,35 +129,13 @@ func TestHPAMinDoesNotScaleBelowCurrent(t *testing.T) {
 	}
 }
 
-func TestParseScaleTarget(t *testing.T) {
-	t1, err := backends.ParseScaleTarget("app/web-hpa", "default")
-	if err != nil || t1.Namespace != "app" || t1.Name != "web-hpa" {
-		t.Fatalf("got %+v err=%v", t1, err)
-	}
-	t2, err := backends.ParseScaleTarget("example.com/v1/namespaces/app/Widget/web", "")
-	if err != nil || t2.APIVersion != "example.com/v1" || t2.Kind != "Widget" || t2.Name != "web" {
-		t.Fatalf("got %+v err=%v", t2, err)
-	}
-}
-
-func TestParseList(t *testing.T) {
-	got, err := backends.ParseList("deployment, hpa-min,crd")
+func TestParseBindingsOrderPreserved(t *testing.T) {
+	got, err := backends.ParseBindings("hpa,deployment,webapp=x", "ns", "web")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0] != "deployment" || got[1] != "hpa-min" || got[2] != "crd" {
-		t.Fatalf("got %v", got)
-	}
-	up := backends.SortForScaleUp([]egv1a1.ScaleBackendType{"crd", "hpa-min", "deployment"})
-	if up[0] != "deployment" || up[1] != "hpa-min" || up[2] != "crd" {
-		t.Fatalf("scale-up order %v", up)
-	}
-	down := backends.SortForScaleDown([]egv1a1.ScaleBackendType{"crd", "deployment", "hpa-min"})
-	if down[0] != "hpa-min" || down[1] != "deployment" || down[2] != "crd" {
-		t.Fatalf("scale-down order %v", down)
-	}
-	if _, err := backends.ParseList("deployment,nope"); err == nil {
-		t.Fatal("expected error for unknown backend")
+	if len(got) != 3 || got[0].Key != "hpa" || got[1].Key != "deployment" || got[2].Key != "webapp" {
+		t.Fatalf("order=%+v", got)
 	}
 }
 
@@ -167,10 +147,12 @@ func TestPatchAnnotationsOnCRD(t *testing.T) {
 			"name":      "web",
 			"namespace": "app",
 		},
-		"spec": map[string]interface{}{"replicas": int64(3)},
+		"spec": map[string]interface{}{
+			"replicas": int64(2),
+		},
 	}}
-	c := fake.NewClientBuilder().WithObjects(obj.DeepCopy()).Build()
-	b := &backends.CRDBackend{}
+	scheme := runtime.NewScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).Build()
 	tgt := backends.Target{
 		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
 		APIVersion: "example.com/v1",
@@ -178,50 +160,36 @@ func TestPatchAnnotationsOnCRD(t *testing.T) {
 		FieldPath:  "spec.replicas",
 	}
 	ctx := context.Background()
-	if err := b.ScaleUp(ctx, c, tgt, 5); err != nil {
-		t.Fatal(err)
-	}
-	if err := backends.PatchAnnotations(ctx, c, tgt, map[string]string{
-		"eviction-guard.io/scaled-to":    "5",
-		"eviction-guard.io/baseline":     "3",
-		"eviction-guard.io/active":       "true",
-		"eviction-guard.io/window-until": "2026-08-30T12:15:00Z",
-	}); err != nil {
+	if err := backends.ScaleUp(ctx, c, tgt, 4); err != nil {
 		t.Fatal(err)
 	}
 	got := &unstructured.Unstructured{}
-	got.SetAPIVersion("example.com/v1")
-	got.SetKind("Widget")
+	got.SetGroupVersionKind(obj.GroupVersionKind())
 	if err := c.Get(ctx, tgt.ObjectKey, got); err != nil {
 		t.Fatal(err)
 	}
 	v, _, _ := unstructured.NestedInt64(got.Object, "spec", "replicas")
-	if v != 5 {
+	if v != 4 {
 		t.Fatalf("replicas=%d", v)
 	}
-	if got.GetAnnotations()["eviction-guard.io/scaled-to"] != "5" || got.GetAnnotations()["eviction-guard.io/active"] != "true" {
-		t.Fatalf("annotations=%v", got.GetAnnotations())
-	}
-
-	if err := b.ScaleDown(ctx, c, tgt, 3); err != nil {
+	if err := backends.PatchAnnotations(ctx, c, tgt, map[string]string{"example.com/active": "true"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := backends.PatchAnnotations(ctx, c, tgt, backends.StampDeletes([]string{
-		"eviction-guard.io/scaled-to",
-		"eviction-guard.io/baseline",
-		"eviction-guard.io/active",
-		"eviction-guard.io/window-until",
-	})); err != nil {
+	if err := c.Get(ctx, tgt.ObjectKey, got); err != nil {
+		t.Fatal(err)
+	}
+	anns, _, _ := unstructured.NestedStringMap(got.Object, "metadata", "annotations")
+	if anns["example.com/active"] != "true" {
+		t.Fatalf("annotations=%v", anns)
+	}
+	if err := backends.ScaleDown(ctx, c, tgt, 2); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Get(ctx, tgt.ObjectKey, got); err != nil {
 		t.Fatal(err)
 	}
 	v, _, _ = unstructured.NestedInt64(got.Object, "spec", "replicas")
-	if v != 3 {
-		t.Fatalf("replicas after down=%d", v)
-	}
-	if len(got.GetAnnotations()) != 0 {
-		t.Fatalf("expected stamp annotations cleared, got %v", got.GetAnnotations())
+	if v != 2 {
+		t.Fatalf("replicas=%d after scale-down", v)
 	}
 }

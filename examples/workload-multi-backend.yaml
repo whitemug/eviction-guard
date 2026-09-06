@@ -1,18 +1,17 @@
-# Raise Deployment replicas and the HPA floor together, and stamp a CR ledger.
+# Raise Deployment replicas and the HPA floor together.
+# Keys must exist on the owning policy's spec.backends — apply examples/policy-spot.yaml
+# (or policy-custom-backend.yaml for an app CR catalog entry).
+# First token is the SpareReady primary — keep deployment first.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: web
   namespace: default
-  labels:
-    eviction-guard.io/enabled: "true"
   annotations:
-    eviction-guard.io/scale-backend: deployment,hpa-min,crd
-    eviction-guard.io/hpa-target: default/web
-    eviction-guard.io/scale-target: example.com/v1/namespaces/default/Widget/web
-    eviction-guard.io/crd-replicas-path: spec.replicas
+    eviction-guard.io/scale-backend: deployment,hpa
     eviction-guard.io/scale-back-after: 20m
     eviction-guard.io/stamp: "true"
+    # optional: eviction-guard.io/policy-pin: multi-backend-demo
     # optional key overrides (defaults: eviction-guard.io/scaled-to, baseline, active, window-until):
     # eviction-guard.io/stamp-scaled-to: example.com/desired
     # eviction-guard.io/stamp-baseline: example.com/baseline
@@ -25,6 +24,7 @@ spec:
     metadata:
       labels:
         app: web
+        eviction-guard.io/protected: "true"
     spec:
       containers:
         - name: web
@@ -43,14 +43,3 @@ spec:
   minReplicas: 2
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: web
-  namespace: default
-spec:
-  minAvailable: 2
-  selector:
-    matchLabels:
-      app: web

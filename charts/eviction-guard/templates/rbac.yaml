@@ -20,7 +20,10 @@ metadata:
     {{- include "eviction-guard.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["nodes", "pods", "namespaces"]
+    resources: ["nodes", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]
@@ -34,9 +37,6 @@ rules:
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["eviction-guard.io"]
     resources: ["evictionguardpolicies", "evictionguardwindows"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

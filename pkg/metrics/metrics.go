@@ -24,6 +24,16 @@ var (
 		Help: "Nodes currently matching a policy NodeFilter.",
 	}, []string{"policy"})
 
+	AtRiskPods = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "evg_at_risk_pods",
+		Help: "Opted-in pods for a workload currently on vulnerable nodes.",
+	}, []string{"policy", "namespace", "workload"})
+
+	DesiredReplicas = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "evg_desired_replicas",
+		Help: "Shared capacity target Eviction Guard wants for a workload (baseline + spare/at-risk, capped by maxBuffer).",
+	}, []string{"policy", "namespace", "workload"})
+
 	CurrentSpare = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "evg_current_spare",
 		Help: "Extra replicas currently held open by Eviction Guard for a workload.",
@@ -48,8 +58,17 @@ var (
 		Name: "evg_max_window_exceeded_total",
 		Help: "Windows that force-cooled because maxWindow elapsed while still Open.",
 	}, []string{"policy", "namespace", "workload"})
+
+	EvictionDecisions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "evg_eviction_decisions_total",
+		Help: "pods/eviction admission decisions (allow|deny).",
+	}, []string{"decision"})
 )
 
 func init() {
-	metrics.Registry.MustRegister(VulnerableNodes, MatchedNodes, CurrentSpare, ScaleActions, SpareNotReady, DeferredWorkloads, MaxWindowExceeded)
+	metrics.Registry.MustRegister(
+		VulnerableNodes, MatchedNodes,
+		AtRiskPods, DesiredReplicas, CurrentSpare,
+		ScaleActions, SpareNotReady, DeferredWorkloads, MaxWindowExceeded, EvictionDecisions,
+	)
 }

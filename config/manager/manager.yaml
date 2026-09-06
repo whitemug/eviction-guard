@@ -16,7 +16,7 @@ metadata:
     control-plane: controller-manager
 spec:
   # One replica is enough; leader election is already on (--leader-elect).
-  # Patch to 2 for HA. Helm: --set replicaCount=2 (see docs/03-install.md).
+  # Patch to 2 for HA. Helm: --set replicaCount=2 (see docs/install.md).
   replicas: 1
   selector:
     matchLabels:

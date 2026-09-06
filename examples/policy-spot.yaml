@@ -14,10 +14,21 @@ spec:
   maxBuffer: 4
   maxConcurrentWindows: 8
   maxWindow: 2h
-  defaultBackend: deployment
-  scaleBackAfter: 15m
+  backends:
+    deployment:
+      apiVersion: apps/v1
+      kind: Deployment
+      patches:
+        - path: spec.replicas
+    hpa:
+      apiVersion: autoscaling/v1
+      kind: HorizontalPodAutoscaler
+      patches:
+        - path: spec.minReplicas
+  scaleBackAfter: 1m
   disruptionSignals:
     - KarpenterDisrupted
     - KarpenterDeleteRequested
     - OutOfService
     - SpotInterrupted
+    - NodeCordoned

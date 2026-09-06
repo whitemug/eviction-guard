@@ -52,11 +52,14 @@ func Lookup(name egv1a1.DisruptionSignal) (Detector, bool) {
 }
 
 // DefaultSignals are enabled when a policy omits spec.disruptionSignals.
+// NodeCordoned is included so kubectl drain / NTH / upgrade paths that only
+// cordon still open a window; narrow with nodeFilter if cordons are noisy.
 func DefaultSignals() []egv1a1.DisruptionSignal {
 	return []egv1a1.DisruptionSignal{
 		egv1a1.SignalKarpenterDisrupted,
 		egv1a1.SignalKarpenterDeleteRequested,
 		egv1a1.SignalOutOfService,
+		egv1a1.SignalNodeCordoned,
 	}
 }
 

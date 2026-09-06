@@ -1,0 +1,34 @@
+# Policy with an app CR in the backend catalog (pairs with workload-multi-backend.yaml).
+# Grant the manager patch rights via Helm extraClusterRoleRules for example.com/widgets.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: multi-backend-demo
+spec:
+  nodeFilter:
+    capacityTypes:
+      - spot
+  spareReplicas: 1
+  maxBuffer: 4
+  backends:
+    deployment:
+      apiVersion: apps/v1
+      kind: Deployment
+      patches:
+        - path: spec.replicas
+    hpa:
+      apiVersion: autoscaling/v1
+      kind: HorizontalPodAutoscaler
+      patches:
+        - path: spec.minReplicas
+    webapp:
+      apiVersion: example.com/v1
+      kind: Widget
+      patches:
+        - path: spec.replicas
+  scaleBackAfter: 1m
+  disruptionSignals:
+    - KarpenterDisrupted
+    - KarpenterDeleteRequested
+    - OutOfService
+    - NodeCordoned

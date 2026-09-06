@@ -1,0 +1,34 @@
+# Illustrative ScaledObject for Recipe B (external EVG + Prometheus).
+# Adjust namespace, deployment name, and Prometheus auth to your cluster.
+# EVG does not apply this file; it is a KEDA-side sketch.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: web
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: web
+  minReplicaCount: 2
+  maxReplicaCount: 20
+  triggers:
+    # Existing load signal (example).
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        metricName: queue_depth
+        query: sum(queue_depth{app="web"})
+        threshold: "10"
+    # Eviction Guard disruption signal — KEDA uses max across triggers.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        metricName: evg_desired_replicas
+        query: max(evg_desired_replicas{namespace="default",workload="web"})
+        threshold: "1"
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        metricName: evg_at_risk_pods
+        query: max(evg_at_risk_pods{namespace="default",workload="web"})
+        threshold: "0.5"

@@ -17,18 +17,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 )
 
-// CRDBackend patches an arbitrary integer field on a custom resource
-// (default spec.replicas). This is the primary extension point for other
-// operators: they keep reconciling their CR; Eviction Guard only writes the count.
-type CRDBackend struct{}
+// fieldBackend patches an arbitrary integer field via unstructured merge-patch.
+// Controllers use the package-level Current / ScaleUp / ScaleDown helpers.
+type fieldBackend struct{}
 
-func (*CRDBackend) Name() egv1a1.ScaleBackendType { return egv1a1.ScaleBackendCRD }
-
-func (b *CRDBackend) Current(ctx context.Context, c client.Client, t Target) (int32, error) {
+func (b *fieldBackend) Current(ctx context.Context, c client.Client, t Target) (int32, error) {
 	obj, path, err := b.get(ctx, c, t)
 	if err != nil {
 		return 0, err
@@ -38,20 +33,21 @@ func (b *CRDBackend) Current(ctx context.Context, c client.Client, t Target) (in
 		return 0, err
 	}
 	if !ok {
-		return 0, nil
+		// Deployment.spec.replicas and HPA.spec.minReplicas default to 1 when unset.
+		return 1, nil
 	}
 	return int32(v), nil
 }
 
-func (b *CRDBackend) ScaleUp(ctx context.Context, c client.Client, t Target, desired int32) error {
+func (b *fieldBackend) ScaleUp(ctx context.Context, c client.Client, t Target, desired int32) error {
 	return b.patch(ctx, c, t, desired)
 }
 
-func (b *CRDBackend) ScaleDown(ctx context.Context, c client.Client, t Target, baseline int32) error {
+func (b *fieldBackend) ScaleDown(ctx context.Context, c client.Client, t Target, baseline int32) error {
 	return b.patch(ctx, c, t, baseline)
 }
 
-func (b *CRDBackend) get(ctx context.Context, c client.Client, t Target) (*unstructured.Unstructured, []string, error) {
+func (b *fieldBackend) get(ctx context.Context, c client.Client, t Target) (*unstructured.Unstructured, []string, error) {
 	gvk, err := parseAPIVersionKind(t.APIVersion, t.Kind)
 	if err != nil {
 		return nil, nil, err
@@ -65,7 +61,7 @@ func (b *CRDBackend) get(ctx context.Context, c client.Client, t Target) (*unstr
 	return obj, path, nil
 }
 
-func (b *CRDBackend) patch(ctx context.Context, c client.Client, t Target, desired int32) error {
+func (b *fieldBackend) patch(ctx context.Context, c client.Client, t Target, desired int32) error {
 	obj, path, err := b.get(ctx, c, t)
 	if err != nil {
 		return err
@@ -121,34 +117,4 @@ func setNested(obj map[string]interface{}, value interface{}, path ...string) er
 		obj[path[0]] = next
 	}
 	return setNested(next, value, path[1:]...)
-}
-
-// ParseScaleTarget decodes eviction-guard.io/scale-target.
-// Accepted forms:
-//   - "namespace/name" (same group as the workload)
-//   - "group/version/namespaces/ns/kind/name"
-func ParseScaleTarget(raw, defaultNS string) (Target, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return Target{}, fmt.Errorf("empty scale-target")
-	}
-	parts := strings.Split(raw, "/")
-	switch len(parts) {
-	case 2:
-		return Target{ObjectKey: client.ObjectKey{Namespace: parts[0], Name: parts[1]}}, nil
-	case 1:
-		return Target{ObjectKey: client.ObjectKey{Namespace: defaultNS, Name: parts[0]}}, nil
-	case 6:
-		// group/version/namespaces/ns/kind/name
-		if parts[2] != "namespaces" {
-			return Target{}, fmt.Errorf("invalid scale-target %q", raw)
-		}
-		return Target{
-			ObjectKey:  client.ObjectKey{Namespace: parts[3], Name: parts[5]},
-			APIVersion: parts[0] + "/" + parts[1],
-			Kind:       parts[4],
-		}, nil
-	default:
-		return Target{}, fmt.Errorf("invalid scale-target %q (want ns/name or group/version/namespaces/ns/kind/name)", raw)
-	}
 }
