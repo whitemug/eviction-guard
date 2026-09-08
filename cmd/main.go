@@ -78,7 +78,7 @@ func main() {
 	if err := (&controller.PolicyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("eviction-guard-policy"),
+		Recorder: mgr.GetEventRecorder("eviction-guard-policy"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EvictionGuardPolicy")
 		os.Exit(1)
@@ -87,7 +87,7 @@ func main() {
 	if err := (&controller.WindowReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("eviction-guard-window"),
+		Recorder: mgr.GetEventRecorder("eviction-guard-window"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EvictionGuardWindow")
 		os.Exit(1)

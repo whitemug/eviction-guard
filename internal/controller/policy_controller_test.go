@@ -19,7 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -135,8 +135,8 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 		Build()
 
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	pr := &PolicyReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(16), Now: func() time.Time { return now }}
-	wr := &WindowReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(16), Now: func() time.Time { return now }}
+	pr := &PolicyReconciler{Client: c, Scheme: scheme, Recorder: events.NewFakeRecorder(16), Now: func() time.Time { return now }}
+	wr := &WindowReconciler{Client: c, Scheme: scheme, Recorder: events.NewFakeRecorder(16), Now: func() time.Time { return now }}
 	return c, pr, wr
 }
 
@@ -1349,7 +1349,7 @@ func TestFirstMatchingPolicyByNameOwnsWorkload(t *testing.T) {
 		t.Fatal("spot-workers must not open a window when alpha-pool wins by name")
 	}
 
-	prOther := &PolicyReconciler{Client: c, Scheme: pr.Scheme, Recorder: record.NewFakeRecorder(8), Now: pr.Now}
+	prOther := &PolicyReconciler{Client: c, Scheme: pr.Scheme, Recorder: events.NewFakeRecorder(8), Now: pr.Now}
 	if _, err := prOther.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "alpha-pool"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1391,7 +1391,7 @@ func TestPolicyPinOverridesNameOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prAlpha := &PolicyReconciler{Client: c, Scheme: pr.Scheme, Recorder: record.NewFakeRecorder(8), Now: pr.Now}
+	prAlpha := &PolicyReconciler{Client: c, Scheme: pr.Scheme, Recorder: events.NewFakeRecorder(8), Now: pr.Now}
 	if _, err := prAlpha.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "alpha-pool"}}); err != nil {
 		t.Fatal(err)
 	}

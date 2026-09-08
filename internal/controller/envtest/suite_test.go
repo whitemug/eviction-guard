@@ -90,14 +90,14 @@ func startEnv() error {
 	if err := (&controller.PolicyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("envtest-policy"),
+		Recorder: mgr.GetEventRecorder("envtest-policy"),
 	}).SetupWithManager(mgr); err != nil {
 		return err
 	}
 	if err := (&controller.WindowReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("envtest-window"),
+		Recorder: mgr.GetEventRecorder("envtest-window"),
 	}).SetupWithManager(mgr); err != nil {
 		return err
 	}

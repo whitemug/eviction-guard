@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Versions follow [SemVer
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `sigs.k8s.io/controller-runtime` to **0.25.0** (and Kubernetes client libraries to **0.37**). Migrate API scheme registration off deprecated `controller-runtime/pkg/scheme.Builder`, and event emission to `GetEventRecorder` / `events.k8s.io` (`emitf` helper). Envtest tooling tracks `release-0.25` with Kubernetes **1.37** binaries.
+
 ### Fixed
 
 - Consecutive integer patches on the same object (e.g. HPA `minReplicas` + `maxReplicas`) apply as one merge patch so API validation stays valid.
