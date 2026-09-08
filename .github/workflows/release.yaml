@@ -102,3 +102,24 @@ jobs:
         run: |
           set -euo pipefail
           cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/eviction-guard@${DIGEST}"
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 - <<'PY' > /tmp/release-notes.md
+          import os, pathlib, re, sys
+          ver = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          m = re.search(
+              rf"(?ms)^## \[{re.escape(ver)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              text,
+          )
+          if not m:
+              sys.exit(f"CHANGELOG.md missing section for {ver}")
+          sys.stdout.write(m.group(1).strip() + "\n")
+          PY
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "v${VERSION}" \
+            --notes-file /tmp/release-notes.md

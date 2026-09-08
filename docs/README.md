@@ -23,5 +23,7 @@ For integrators and maintainers:
 | [Design](design.md) | Architecture and design rationale |
 | [Scale targets](design-scale-targets.md) | Backend catalog design (locked decisions) |
 | [Publishing](publishing.md) | Release, GHCR, Cosign |
+| [Support](../SUPPORT.md) | Where to ask questions / report bugs |
+| [Contributing](../CONTRIBUTING.md) | Dev setup and PR expectations |
 
 Examples live in [`../examples/`](../examples/).

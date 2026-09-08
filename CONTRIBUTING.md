@@ -4,6 +4,8 @@ Eviction Guard is intended as a small, composable Kubernetes controller. Changes
 
 Look for issues labeled [`good first issue`](https://github.com/whitemug/eviction-guard/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). A typical first PR is an example policy, a catalog entry, or a unit test next to `pkg/signals` / `pkg/filters` — not a new CRD field.
 
+Questions that are not bugs belong in [Discussions](https://github.com/whitemug/eviction-guard/discussions) or see [SUPPORT.md](SUPPORT.md).
+
 ## Development
 
 Requires **Go 1.27.1** on `PATH` (`go version` should print `go1.27`). The module pins this in `go.mod` (`go 1.27.1`); CI reads that file and the Dockerfile uses `golang:1.27.1`. An older local `go` (1.18–1.20) fails with `invalid go version '1.23.0': must match format 1.23` — that is the *old binary* rejecting a modern `go.mod`, not this project using 1.23. Override with `make test GO=/path/to/go1.27/bin/go`.
@@ -19,7 +21,7 @@ make govulncheck   # known-vulnerability scan
 make build         # bin/manager
 ```
 
-CI runs the same gates on every PR (`test` job), then `make test-kind` (`e2e` job). A parallel `image` job builds the container and runs Trivy (`HIGH`/`CRITICAL`). Tagged `v*` releases push the image and Helm OCI chart to GHCR, Trivy-scan the digest, and Cosign-sign both.
+CI runs the same gates on every PR (`test` job), then `make test-kind` (`e2e` job). A parallel `image` job builds the container and runs Trivy (`HIGH`/`CRITICAL`). Tagged `v*` releases push the image and Helm OCI chart to GHCR, Trivy-scan the digest, Cosign-sign both, and create a GitHub Release from `CHANGELOG.md`.
 
 Run against a cluster (kind / k3d is enough):
 

@@ -4,31 +4,33 @@ What is already in the tree versus what you do on GitHub when you cut a public r
 
 ## In this repository
 
-- MIT license, Contributor Covenant, CONTRIBUTING, SECURITY, CHANGELOG, UPGRADING
+- MIT license, Contributor Covenant, CONTRIBUTING, SUPPORT, SECURITY, CHANGELOG, UPGRADING, MAINTAINERS, CODEOWNERS
 - Go module `github.com/whitemug/eviction-guard` (`api/v1alpha1`, `pkg/`)
 - CRDs, Helm chart (+ chart README), Kustomize package
 - CI: unit tests, envtest, golangci-lint, govulncheck, `helm lint` / `helm template`, kind e2e, Trivy image scan
-- Tag-driven release: GHCR image, Helm OCI chart, Trivy on the pushed digest, Cosign keyless signatures
+- Tag-driven release: GHCR image, Helm OCI chart, Trivy on the pushed digest, Cosign keyless signatures, GitHub Release from CHANGELOG
 - Dependabot: Go modules, Dockerfile, GitHub Actions
 
 ## GitHub / release steps
 
 1. Make `whitemug/eviction-guard` **public**. Enable Issues, Discussions, Actions pushing to GHCR, and **Dependabot**. Code scanning (Trivy SARIF) is free once public; private repos need GitHub Advanced Security.
 2. Set a short repo description and topics (`kubernetes`, `operator`, `karpenter`, `autoscaling`, `eviction`, `webhook`).
-3. Bump in lockstep with the git tag (the release job fails if they drift):
+3. First-time GHCR: make the `eviction-guard` and `charts/eviction-guard` packages **public**, or enable “Inherit access from source repository”.
+4. Bump in lockstep with the git tag (the release job fails if they drift):
    - `charts/eviction-guard/Chart.yaml` `version` and `appVersion`
    - `charts/eviction-guard/values.yaml` `image.tag`
    - Update `CHANGELOG.md` / docs install examples
-4. Tag the release:
+5. Merge to `main`, then tag the release:
    ```bash
+   git checkout main && git pull
    git tag v0.2.0
    git push origin v0.2.0
    ```
    That publishes:
    - Image `ghcr.io/whitemug/eviction-guard:0.2.0` (and the `0.2` minor tag)
    - Chart `oci://ghcr.io/whitemug/charts/eviction-guard:0.2.0`
-   Both are signed with Cosign keyless (GitHub OIDC → Sigstore). Helm GPG `.prov` files are not used.
-5. First-time GHCR: make the `eviction-guard` and `charts/eviction-guard` packages **public**, or enable “Inherit access from source repository”.
+   - A GitHub Release whose body is the matching CHANGELOG section
+   Both artifacts are signed with Cosign keyless (GitHub OIDC → Sigstore). Helm GPG `.prov` files are not used.
 6. Optional: Artifact Hub listing.
 7. Compatibility: `v1alpha1` may change; see [UPGRADING.md](../UPGRADING.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 

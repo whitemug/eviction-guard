@@ -1,5 +1,10 @@
 # Eviction Guard
 
+[![CI](https://github.com/whitemug/eviction-guard/actions/workflows/ci.yaml/badge.svg)](https://github.com/whitemug/eviction-guard/actions/workflows/ci.yaml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/whitemug/eviction-guard?include_prereleases)](https://github.com/whitemug/eviction-guard/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/whitemug/eviction-guard.svg)](https://pkg.go.dev/github.com/whitemug/eviction-guard)
+
 Proactive protection for **voluntary node drains**: scale opted-in Deployments so spare pods are Ready **before** eviction, then let drain proceed and scale back.
 
 A validating webhook on `pods/eviction` denies eviction of opted-in pods until spare capacity is Ready (one at-risk pod at a time). Node signals (Karpenter, cordon, …) only start scale-up earlier. `eviction-guard.io/protected` on the pod template is **opt-in**, not a lock.
@@ -114,7 +119,15 @@ See [docs/extension.md](docs/extension.md). Building from source needs **Go 1.27
 
 ## Status
 
-v1alpha1 (`0.2.0`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
+v1alpha1 (`0.2.0`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md).
+
+## Community
+
+- [Contributing](CONTRIBUTING.md)
+- [Support](SUPPORT.md)
+- [Security](SECURITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Maintainers](MAINTAINERS)
 
 ## License
 

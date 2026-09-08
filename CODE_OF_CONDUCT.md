@@ -33,9 +33,12 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Report incidents to [Vikas Verma](https://github.com/vikasvr) (via a private
-security advisory or by contacting the repository owners). Maintainers will
-review and respond as appropriate.
+Report incidents privately to the lead maintainer, [Vikas Verma](https://github.com/vikasvr),
+by opening a [private security advisory](https://github.com/whitemug/eviction-guard/security/advisories/new)
+(choose a clear non-vulnerability title if the report is conduct-only) or by contacting
+the repository owners through GitHub. Do not file public issues for conduct reports.
+
+Maintainers will review and respond as appropriate. See [MAINTAINERS](MAINTAINERS).
 
 This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org),
 version 2.1.

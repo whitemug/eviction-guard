@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: How do I…?
-    url: https://github.com/whitemug/eviction-guard/issues/new?labels=question
-    about: Install, EvictionGuardPolicy, nodeFilter, or customSignals — use a Question issue until Discussions is enabled.
+    url: https://github.com/whitemug/eviction-guard/discussions
+    about: Install, EvictionGuardPolicy, nodeFilter, or customSignals — ask in Discussions.
+  - name: Security report
+    url: https://github.com/whitemug/eviction-guard/security/advisories/new
+    about: Privately report a vulnerability (do not open a public issue).
