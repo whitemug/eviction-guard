@@ -1,6 +1,6 @@
 # Maintainer checklist (publishing)
 
-What is already in the tree versus what you do on GitHub when you cut a public release.
+What is already in the tree versus what you do on GitHub when cutting a release or going public.
 
 ## In this repository
 
@@ -11,28 +11,40 @@ What is already in the tree versus what you do on GitHub when you cut a public r
 - Tag-driven release: GHCR image, Helm OCI chart, Trivy on the pushed digest, Cosign keyless signatures, GitHub Release from CHANGELOG
 - Dependabot: Go modules, Dockerfile, GitHub Actions
 
-## GitHub / release steps
+## Current release state
 
-1. Make `whitemug/eviction-guard` **public**. Enable Issues, Discussions, Actions pushing to GHCR, and **Dependabot**. Code scanning (Trivy SARIF) is free once public; private repos need GitHub Advanced Security.
-2. Set a short repo description and topics (`kubernetes`, `operator`, `karpenter`, `autoscaling`, `eviction`, `webhook`).
-3. First-time GHCR: make the `eviction-guard` and `charts/eviction-guard` packages **public**, or enable “Inherit access from source repository”.
-4. Bump in lockstep with the git tag (the release job fails if they drift):
+`v0.2.0` is already tagged. Image and chart were published to GHCR and signed; a GitHub Release exists.
+Artifacts may still be **private** on GHCR even when the git repo is public — flip package visibility separately.
+
+## Go public (existing `v0.2.0`)
+
+1. Make `whitemug/eviction-guard` **public**. Enable Issues, Discussions, Actions → GHCR, and **Dependabot**. Code scanning (Trivy SARIF) is free once public.
+2. Confirm description/topics (`kubernetes`, `operator`, `karpenter`, `autoscaling`, `eviction`, `webhook`). Org may need to allow forking for public repos.
+3. Make GHCR packages **`eviction-guard`** and **`charts/eviction-guard`** public (or inherit from the source repository). Verify:
+   ```bash
+   helm pull oci://ghcr.io/whitemug/charts/eviction-guard --version 0.2.0
+   ```
+4. Optional: Artifact Hub listing (chart already carries `artifacthub.io/*` annotations).
+
+## Cut a new version (e.g. `v0.2.1`)
+
+1. Bump in lockstep with the git tag (the release job fails if they drift):
    - `charts/eviction-guard/Chart.yaml` `version` and `appVersion`
    - `charts/eviction-guard/values.yaml` `image.tag`
-   - Update `CHANGELOG.md` / docs install examples
-5. Merge to `main`, then tag the release:
+   - `config/default/kustomization.yaml` `newTag` (keep samples aligned)
+   - `CHANGELOG.md` + docs install examples
+2. Merge to `main`, then tag:
    ```bash
    git checkout main && git pull
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.2.1
+   git push origin v0.2.1
    ```
    That publishes:
-   - Image `ghcr.io/whitemug/eviction-guard:0.2.0` (and the `0.2` minor tag)
-   - Chart `oci://ghcr.io/whitemug/charts/eviction-guard:0.2.0`
-   - A GitHub Release whose body is the matching CHANGELOG section
+   - Image `ghcr.io/whitemug/eviction-guard:0.2.1` (and the `0.2` minor tag)
+   - Chart `oci://ghcr.io/whitemug/charts/eviction-guard:0.2.1`
+   - A GitHub Release whose body is the matching CHANGELOG section (create-or-update on re-run)
    Both artifacts are signed with Cosign keyless (GitHub OIDC → Sigstore). Helm GPG `.prov` files are not used.
-6. Optional: Artifact Hub listing.
-7. Compatibility: `v1alpha1` may change; see [UPGRADING.md](../UPGRADING.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
+3. Compatibility: `v1alpha1` may change; see [UPGRADING.md](../UPGRADING.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ### Pre-tag reminders
 

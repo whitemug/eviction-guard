@@ -34,9 +34,9 @@ Examples of unacceptable behavior:
 ## Enforcement
 
 Report incidents privately to the lead maintainer, [Vikas Verma](https://github.com/vikasvr),
-by opening a [private security advisory](https://github.com/whitemug/eviction-guard/security/advisories/new)
-(choose a clear non-vulnerability title if the report is conduct-only) or by contacting
-the repository owners through GitHub. Do not file public issues for conduct reports.
+via GitHub (direct message or email listed on the profile). Do **not** use public issues,
+Discussions, or security advisories for conduct reports — advisories are reserved for
+vulnerabilities (see [SECURITY.md](SECURITY.md)).
 
 Maintainers will review and respond as appropriate. See [MAINTAINERS](MAINTAINERS).
 

@@ -1,3 +1,4 @@
+# Kubebuilder sample. Prefer examples/ for day-to-day tryouts (see examples/README.md).
 apiVersion: eviction-guard.io/v1alpha1
 kind: EvictionGuardPolicy
 metadata:

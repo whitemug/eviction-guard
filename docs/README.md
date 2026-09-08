@@ -26,4 +26,4 @@ For integrators and maintainers:
 | [Support](../SUPPORT.md) | Where to ask questions / report bugs |
 | [Contributing](../CONTRIBUTING.md) | Dev setup and PR expectations |
 
-Examples live in [`../examples/`](../examples/).
+Examples live in [`../examples/`](../examples/README.md).

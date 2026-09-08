@@ -10,7 +10,7 @@
 
 ## Ask for help
 
-1. **GitHub Discussions** — install questions, design trade-offs, “is this supported?”
+1. **[GitHub Discussions](https://github.com/whitemug/eviction-guard/discussions)** — install questions, design trade-offs, “is this supported?”
 2. **Bug report** — unexpected deny/allow, scale failures, crashes ([bug template](https://github.com/whitemug/eviction-guard/issues/new?template=bug.yml))
 3. **Feature request** — new signals, backends, or APIs ([feature template](https://github.com/whitemug/eviction-guard/issues/new?template=feature.yml))
 

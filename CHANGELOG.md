@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/); the CRD API is `v1alpha1` and may still change before a beta.
 
-## [0.2.0] — 2026-09-07
+## [0.2.0] — 2026-09-08
 
 First public-oriented redesign cut. **Breaking** relative to any prior `0.1.x` chart/image that used `defaultBackend` / REST `scale-target` / PDB-style hold.
 
@@ -31,6 +31,10 @@ First public-oriented redesign cut. **Breaking** relative to any prior `0.1.x` c
 - Metrics: [docs/metrics.md](docs/metrics.md). GitOps: [docs/gitops.md](docs/gitops.md). KEDA: [docs/keda.md](docs/keda.md).
 - Migration: [UPGRADING.md](UPGRADING.md).
 
-## [0.1.1] — prior
+## [0.1.1] — 2026-09-01
 
-Pre-redesign release (private / early). See git history for details.
+Pre-redesign patch (private / early). See git history for details.
+
+## [0.1.0] — 2026-08-31
+
+Initial private release.

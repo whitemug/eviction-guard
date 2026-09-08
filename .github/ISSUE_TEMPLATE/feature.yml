@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Prefer a `customSignals` recipe or a Helm `--set` over a new compiled API when that is enough. See [docs/extension.md](../../docs/extension.md) and [docs/signals.md](../../docs/signals.md).
+        Prefer a `customSignals` recipe or a Helm `--set` over a new compiled API when that is enough. See [docs/extension.md](https://github.com/whitemug/eviction-guard/blob/main/docs/extension.md) and [docs/signals.md](https://github.com/whitemug/eviction-guard/blob/main/docs/signals.md).
   - type: textarea
     id: problem
     attributes:
