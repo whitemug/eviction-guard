@@ -15,13 +15,15 @@ make test          # generate, manifests, fmt, vet, unit tests (fake client)
 make test-envtest  # both reconcilers against kube-apiserver (downloads envtest assets)
 make test-kind     # kind: taint → eviction deny → scale → SpareReady → eviction allow → scale-back
                    # ARGS='--verbose' or VERBOSE=1 for Policy/Window dumps; KEEP=1 to retain cluster
+make test-kind-backends  # kind: Deployment / HPA min+max / KEDA Recipe A+B backends
+                         # CASES=keda-external VERBOSE=1; REUSE=1 KEEP=1 for local polish
 make helm-lint     # helm lint + helm template (no cluster)
 make lint          # golangci-lint
 make govulncheck   # known-vulnerability scan
 make build         # bin/manager
 ```
 
-CI runs the same gates on every PR (`test` job), then `make test-kind` (`e2e` job). A parallel `image` job builds the container and runs Trivy (`HIGH`/`CRITICAL`). Tagged `v*` releases push the image and Helm OCI chart to GHCR, Trivy-scan the digest, Cosign-sign both, and create a GitHub Release from `CHANGELOG.md`.
+CI runs the same gates on every PR (`test` job), then `make test-kind` and `make test-kind-backends` in parallel (`e2e` / `e2e-backends`). A parallel `image` job builds the container and runs Trivy (`HIGH`/`CRITICAL`). Tagged `v*` releases push the image and Helm OCI chart to GHCR, Trivy-scan the digest, Cosign-sign both, and create a GitHub Release from `CHANGELOG.md`.
 
 Run against a cluster (kind / k3d is enough):
 

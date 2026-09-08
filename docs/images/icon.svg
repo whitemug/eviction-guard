@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Eviction Guard">
+  <rect width="128" height="128" rx="24" fill="#0f172a"/>
+  <path fill="#38bdf8" d="M64 18c18 8 34 10 42 11v34c0 28-18 46-42 55-24-9-42-27-42-55V29c8-1 24-3 42-11z"/>
+  <path fill="#0f172a" d="M64 34c12 5 23 7 28 7v22c0 18-12 30-28 36-16-6-28-18-28-36V41c5 0 16-2 28-7z"/>
+  <circle cx="64" cy="58" r="10" fill="#e2e8f0"/>
+  <rect x="54" y="68" width="20" height="18" rx="4" fill="#e2e8f0"/>
+</svg>

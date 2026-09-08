@@ -47,6 +47,49 @@ func (b *fieldBackend) ScaleDown(ctx context.Context, c client.Client, t Target,
 	return b.patch(ctx, c, t, baseline)
 }
 
+func (b *fieldBackend) PatchIntegers(ctx context.Context, c client.Client, base Target, paths []string, values map[string]int32) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	if len(paths) == 1 {
+		t := base
+		t.FieldPath = paths[0]
+		return b.patch(ctx, c, t, values[paths[0]])
+	}
+	obj, _, err := b.get(ctx, c, base)
+	if err != nil {
+		return err
+	}
+	need := false
+	patch := map[string]interface{}{}
+	for _, path := range paths {
+		desired, ok := values[path]
+		if !ok {
+			continue
+		}
+		parts := splitFieldPath(path)
+		cur, has, _ := unstructured.NestedInt64(obj.Object, parts...)
+		if has && int32(cur) == desired {
+			continue
+		}
+		need = true
+		if err := setNested(patch, int64(desired), parts...); err != nil {
+			return err
+		}
+	}
+	if !need {
+		return nil
+	}
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	if err := c.Patch(ctx, obj, client.RawPatch(types.MergePatchType, raw)); err != nil {
+		return fmt.Errorf("patch %s %s: %w", obj.GroupVersionKind().String(), base.ObjectKey, err)
+	}
+	return nil
+}
+
 func (b *fieldBackend) get(ctx context.Context, c client.Client, t Target) (*unstructured.Unstructured, []string, error) {
 	gvk, err := parseAPIVersionKind(t.APIVersion, t.Kind)
 	if err != nil {

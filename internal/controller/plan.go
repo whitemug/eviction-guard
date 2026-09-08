@@ -123,23 +123,61 @@ func uniqueStrings(in []string) []string {
 
 func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName string) (bool, error) {
 	scaled := false
-	for _, s := range p.steps {
-		current, err := backends.Current(ctx, c, s.target)
-		if err != nil {
-			return scaled, wrapBackendErr(s.target, err)
+	// Walk steps top-to-bottom. Consecutive paths on the same object are one
+	// merge patch (list order preserved; no reordering).
+	for i := 0; i < len(p.steps); {
+		group := []scaleStep{p.steps[i]}
+		j := i + 1
+		for j < len(p.steps) && sameScaleObject(p.steps[i].target, p.steps[j].target) {
+			group = append(group, p.steps[j])
+			j++
 		}
-		if current < s.desired {
-			if err := backends.ScaleUp(ctx, c, s.target, s.desired); err != nil {
+		var paths []string
+		values := map[string]int32{}
+		var stamp map[string]string
+		raised := false
+		for _, s := range group {
+			current, err := backends.Current(ctx, c, s.target)
+			if err != nil {
 				return scaled, wrapBackendErr(s.target, err)
 			}
-			metrics.ScaleActions.WithLabelValues(policyName, "up", metricBackend(s), "ok").Inc()
-			scaled = true
+			path := s.target.FieldPath
+			paths = append(paths, path)
+			if current < s.desired {
+				values[path] = s.desired
+				raised = true
+			}
+			if len(s.stamp) > 0 {
+				if stamp == nil {
+					stamp = map[string]string{}
+				}
+				for k, v := range s.stamp {
+					stamp[k] = v
+				}
+			}
 		}
-		if err := backends.PatchAnnotations(ctx, c, s.target, s.stamp); err != nil {
-			return scaled, wrapBackendErr(s.target, err)
+		if len(values) > 0 {
+			base := group[0].target
+			if err := backends.PatchIntegers(ctx, c, base, paths, values); err != nil {
+				return scaled, wrapBackendErr(base, err)
+			}
+			if raised {
+				metrics.ScaleActions.WithLabelValues(policyName, "up", metricBackend(group[0]), "ok").Inc()
+				scaled = true
+			}
 		}
+		if len(stamp) > 0 {
+			if err := backends.PatchAnnotations(ctx, c, group[0].target, stamp); err != nil {
+				return scaled, wrapBackendErr(group[0].target, err)
+			}
+		}
+		i = j
 	}
 	return scaled, nil
+}
+
+func sameScaleObject(a, b backends.Target) bool {
+	return a.APIVersion == b.APIVersion && a.Kind == b.Kind && a.Namespace == b.Namespace && a.Name == b.Name
 }
 
 // wrapBackendErr turns API Forbidden into a clear missing-RBAC error for catalog targets.
@@ -192,41 +230,102 @@ func (p *scalePlan) actions(existing []egv1a1.ScaleAction) []egv1a1.ScaleAction 
 }
 
 func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, deployFloor int32) error {
-	// Preserve Spec.Actions order (workload binding order); do not re-sort by kind.
+	// Top-to-bottom Spec.Actions order. Consecutive paths on the same object
+	// restore in one merge patch (no reordering).
 	actions := win.ScaleActions()
 	coord := hasDeployAction(actions) && hasHPAMinAction(actions)
-	for _, a := range actions {
+	for i := 0; i < len(actions); {
+		a := actions[i]
 		target := actionTarget(a)
 		if target.Namespace == "" {
 			target.Namespace = win.Namespace
 		}
-		current, err := backends.Current(ctx, c, target)
-		if err != nil {
-			return wrapBackendErr(target, err)
+		group := []egv1a1.ScaleAction{a}
+		j := i + 1
+		for j < len(actions) {
+			tj := actionTarget(actions[j])
+			if tj.Namespace == "" {
+				tj.Namespace = win.Namespace
+			}
+			if !sameScaleObject(target, tj) {
+				break
+			}
+			group = append(group, actions[j])
+			j++
 		}
-		floor := a.Baseline
-		if isDeployAction(a) {
-			floor = deployFloor
-		}
-		if current > floor {
-			switch {
-			case isHPAMinAction(a) && coord:
-				if err := backends.RestoreMinReplicas(ctx, c, target, floor); err != nil {
-					return wrapBackendErr(target, err)
+
+		if len(group) == 1 {
+			if err := restoreOneAction(ctx, c, win, group[0], deployFloor, coord); err != nil {
+				return err
+			}
+		} else {
+			var paths []string
+			values := map[string]int32{}
+			var stampKeys []string
+			for _, ga := range group {
+				gt := actionTarget(ga)
+				if gt.Namespace == "" {
+					gt.Namespace = win.Namespace
 				}
-			case isHPAMinAction(a):
-				if err := backends.ScaleDownMinReplicas(ctx, c, target, floor); err != nil {
-					return wrapBackendErr(target, err)
+				floor := ga.Baseline
+				if isDeployAction(ga) {
+					floor = deployFloor
 				}
-			default:
-				if err := backends.ScaleDown(ctx, c, target, floor); err != nil {
+				current, err := backends.Current(ctx, c, gt)
+				if err != nil {
+					return wrapBackendErr(gt, err)
+				}
+				paths = append(paths, gt.FieldPath)
+				if current > floor {
+					values[gt.FieldPath] = floor
+				}
+				stampKeys = append(stampKeys, ga.StampKeys...)
+			}
+			if len(values) > 0 {
+				if err := backends.PatchIntegers(ctx, c, target, paths, values); err != nil {
 					return wrapBackendErr(target, err)
 				}
 			}
+			if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(uniqueStrings(stampKeys))); err != nil {
+				return wrapBackendErr(target, err)
+			}
 		}
-		if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(a.StampKeys)); err != nil {
-			return wrapBackendErr(target, err)
+		i = j
+	}
+	return nil
+}
+
+func restoreOneAction(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, a egv1a1.ScaleAction, deployFloor int32, coord bool) error {
+	target := actionTarget(a)
+	if target.Namespace == "" {
+		target.Namespace = win.Namespace
+	}
+	current, err := backends.Current(ctx, c, target)
+	if err != nil {
+		return wrapBackendErr(target, err)
+	}
+	floor := a.Baseline
+	if isDeployAction(a) {
+		floor = deployFloor
+	}
+	if current > floor {
+		switch {
+		case isHPAMinAction(a) && coord:
+			if err := backends.RestoreMinReplicas(ctx, c, target, floor); err != nil {
+				return wrapBackendErr(target, err)
+			}
+		case isHPAMinAction(a):
+			if err := backends.ScaleDownMinReplicas(ctx, c, target, floor); err != nil {
+				return wrapBackendErr(target, err)
+			}
+		default:
+			if err := backends.ScaleDown(ctx, c, target, floor); err != nil {
+				return wrapBackendErr(target, err)
+			}
 		}
+	}
+	if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(a.StampKeys)); err != nil {
+		return wrapBackendErr(target, err)
 	}
 	return nil
 }

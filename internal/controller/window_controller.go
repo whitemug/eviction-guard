@@ -280,12 +280,17 @@ func (r *WindowReconciler) scaleFloor(ctx context.Context, win *egv1a1.EvictionG
 	if hpa == nil {
 		return floor, false, nil
 	}
+	min := int32(1)
+	if hpa.Spec.MinReplicas != nil {
+		min = *hpa.Spec.MinReplicas
+	}
 	// Desired/current equal to ScaledTo is our own scale-up echoing through HPA — still scale back.
-	// Hold only when HPA has moved *past* the spare we added (genuine load).
-	if hpa.Status.DesiredReplicas > win.Spec.ScaledTo {
+	// Hold only when HPA has moved *past* the spare we added (genuine load), not when it is
+	// merely pinned to a stale MinReplicas after ScaledTo shrank (at-risk count dropped).
+	if hpa.Status.DesiredReplicas > win.Spec.ScaledTo && hpa.Status.DesiredReplicas > min {
 		return floor, true, nil
 	}
-	if hpa.Status.CurrentReplicas > win.Spec.ScaledTo {
+	if hpa.Status.CurrentReplicas > win.Spec.ScaledTo && hpa.Status.CurrentReplicas > min {
 		return floor, true, nil
 	}
 	return floor, false, nil

@@ -87,7 +87,9 @@ GitOps (Argo/Flux) will revert those patches unless you ignore capacity fields â
 
 ### HPA `minReplicas` == `maxReplicas`
 
-Eviction Guard can patch **both** on one catalog entry:
+Eviction Guard can patch **both** on one catalog entry. Paths are applied
+**top-to-bottom** in list order; consecutive paths on the same object are written
+in a single merge patch (so `min`/`max` stay valid together).
 
 ```yaml
 backends:

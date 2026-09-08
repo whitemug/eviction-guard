@@ -12,7 +12,7 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 COPY pkg/ pkg/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-    go build -mod=readonly -a -o manager cmd/main.go
+    go build -mod=readonly -trimpath -ldflags="-s -w" -o manager cmd/main.go
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
