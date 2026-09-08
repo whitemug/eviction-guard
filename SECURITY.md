@@ -18,11 +18,15 @@ Include:
 
 ## Trust boundary
 
-Eviction Guard is a cluster-scoped operator. It can patch Deployments and HPAs. Treat `EvictionGuardPolicy` create/update as a privileged action; restrict it with RBAC the same way you restrict HPA or ClusterAutoscaler objects.
+Eviction Guard is a cluster-scoped operator. It can patch Deployments and HPAs, and (with the default webhook) **deny `pods/eviction`** for opted-in pods until spare capacity is Ready. Treat `EvictionGuardPolicy` create/update as a privileged action; restrict it with RBAC the same way you restrict HPA or ClusterAutoscaler objects.
+
+With `webhook.failurePolicy: Fail` (Helm default), a webhook outage blocks voluntary drains of opted-in pods until the webhook recovers. That is intentional; do not set `Ignore` unless you accept cold drains during outages. See [docs/howto.md](docs/howto.md).
+
+The manager metrics endpoint (default `:8080`) is plaintext and unauthenticated. Restrict access with NetworkPolicy (or bind to localhost and scrape via a sidecar) on multi-tenant clusters.
 
 ## Signed releases
 
-Tagged images (`ghcr.io/whitemug/eviction-guard`) and Helm OCI charts (`ghcr.io/whitemug/charts/eviction-guard`) are signed with Cosign keyless (GitHub Actions OIDC). See [`docs/05-publishing.md`](docs/05-publishing.md) for `cosign verify` commands.
+Tagged images (`ghcr.io/whitemug/eviction-guard`) and Helm OCI charts (`ghcr.io/whitemug/charts/eviction-guard`) are signed with Cosign keyless (GitHub Actions OIDC). See [`docs/publishing.md`](docs/publishing.md) for `cosign verify` commands.
 
 ## Scanning
 

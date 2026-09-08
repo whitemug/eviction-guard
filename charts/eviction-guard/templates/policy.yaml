@@ -12,9 +12,8 @@ spec:
   maxBuffer: {{ .Values.defaultPolicy.maxBuffer }}
   maxConcurrentWindows: {{ .Values.defaultPolicy.maxConcurrentWindows }}
   maxWindow: {{ .Values.defaultPolicy.maxWindow }}
-  defaultBackend: {{ .Values.defaultPolicy.defaultBackend }}
-  {{- with .Values.defaultPolicy.additionalBackends }}
-  additionalBackends:
+  {{- with .Values.defaultPolicy.backends }}
+  backends:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   scaleBackAfter: {{ .Values.defaultPolicy.scaleBackAfter }}
@@ -22,7 +21,6 @@ spec:
   stamp:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  requirePDB: {{ .Values.defaultPolicy.requirePDB }}
   {{- with .Values.defaultPolicy.disruptionSignals }}
   disruptionSignals:
     {{- toYaml . | nindent 4 }}

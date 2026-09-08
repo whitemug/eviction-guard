@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Prefer a `customSignals` recipe or a Helm `--set` over a new compiled API when that is enough. See [docs/04-extension.md](../../docs/04-extension.md) and [docs/06-signal-catalog.md](../../docs/06-signal-catalog.md).
+        Prefer a `customSignals` recipe or a Helm `--set` over a new compiled API when that is enough. See [docs/extension.md](../../docs/extension.md) and [docs/signals.md](../../docs/signals.md).
   - type: textarea
     id: problem
     attributes:

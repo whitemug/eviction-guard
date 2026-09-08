@@ -12,58 +12,64 @@ package validate
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/backends"
 )
 
+var (
+	dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+)
+
+// ScaleBackendRequired reports an error when eviction-guard.io/scale-backend is
+// missing or blank. Protected workloads must set it (no default catalog bind).
+func ScaleBackendRequired(ann map[string]string) error {
+	raw := ""
+	if ann != nil {
+		raw = ann[egv1a1.ScaleBackendAnnotation]
+	}
+	if strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("%s is required (list policy.spec.backends keys; first key is SpareReady primary)",
+			egv1a1.ScaleBackendAnnotation)
+	}
+	return nil
+}
+
 // WorkloadAnnotations checks eviction-guard.io/* annotations on a Deployment.
-// Empty annotations are valid (the policy supplies defaults).
+// When scale-backend is set, its token syntax is validated. Call
+// ScaleBackendRequired separately when the pod template is protected.
 func WorkloadAnnotations(namespace string, ann map[string]string) error {
 	if ann == nil {
 		return nil
 	}
 
-	var list []egv1a1.ScaleBackendType
 	if raw := ann[egv1a1.ScaleBackendAnnotation]; raw != "" {
-		parsed, err := backends.ParseList(raw)
-		if err != nil {
+		if _, err := backends.ParseBindings(raw, namespace, "workload"); err != nil {
 			return fmt.Errorf("%s: %w", egv1a1.ScaleBackendAnnotation, err)
 		}
-		list = parsed
 	}
 
 	if raw := ann[egv1a1.ScaleBackAfterAnnotation]; raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
-			return fmt.Errorf("%s: %w (want a Go duration such as 15m or 1h)", egv1a1.ScaleBackAfterAnnotation, err)
+			return fmt.Errorf("%s: %w (want a Go duration such as 1m or 1h)", egv1a1.ScaleBackAfterAnnotation, err)
 		}
 		if d <= 0 {
 			return fmt.Errorf("%s must be greater than 0", egv1a1.ScaleBackAfterAnnotation)
 		}
 	}
 
-	if raw := ann[egv1a1.HPATargetAnnotation]; raw != "" {
-		if _, err := backends.ParseScaleTarget(raw, namespace); err != nil {
-			return fmt.Errorf("%s: %w", egv1a1.HPATargetAnnotation, err)
-		}
-	}
-
-	if raw := ann[egv1a1.ScaleTargetAnnotation]; raw != "" {
-		t, err := backends.ParseScaleTarget(raw, namespace)
-		if err != nil {
-			return fmt.Errorf("%s: %w", egv1a1.ScaleTargetAnnotation, err)
-		}
-		if hasBackend(list, egv1a1.ScaleBackendCRD) && (t.APIVersion == "" || t.Kind == "") {
-			return fmt.Errorf("crd backend requires %s as group/version/namespaces/ns/kind/name", egv1a1.ScaleTargetAnnotation)
-		}
-	} else if hasBackend(list, egv1a1.ScaleBackendCRD) {
-		return fmt.Errorf("crd backend requires annotation %s", egv1a1.ScaleTargetAnnotation)
-	}
-
 	if raw := ann[egv1a1.StampAnnotation]; raw != "" && raw != "true" && raw != "false" {
 		return fmt.Errorf("%s must be \"true\" or \"false\"", egv1a1.StampAnnotation)
+	}
+
+	if raw := strings.TrimSpace(ann[egv1a1.PolicyPinAnnotation]); raw != "" {
+		if len(raw) > 63 || !dns1123Label.MatchString(raw) {
+			return fmt.Errorf("%s must be a DNS-1123 label (policy name)", egv1a1.PolicyPinAnnotation)
+		}
 	}
 	return nil
 }
@@ -79,14 +85,37 @@ func Policy(p *egv1a1.EvictionGuardPolicy) error {
 			return fmt.Errorf("spec.nodeFilter.namePattern: %w", err)
 		}
 	}
-	return nil
-}
-
-func hasBackend(list []egv1a1.ScaleBackendType, want egv1a1.ScaleBackendType) bool {
-	for _, b := range list {
-		if b == want {
-			return true
-		}
+	if len(p.Spec.Backends) == 0 {
+		return fmt.Errorf("spec.backends is required")
 	}
-	return false
+	for key, entry := range p.Spec.Backends {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("spec.backends: empty key")
+		}
+		if len(key) > 63 || !dns1123Label.MatchString(key) {
+			return fmt.Errorf("spec.backends[%s]: key must be a DNS-1123 label", key)
+		}
+		if entry.APIVersion == "" || entry.Kind == "" {
+			return fmt.Errorf("spec.backends[%s]: apiVersion and kind are required", key)
+		}
+		if len(entry.Patches) == 0 {
+			continue
+		}
+		paths := 0
+		seenPath := map[string]bool{}
+		for i, patch := range entry.Patches {
+			if patch.Path == "" && patch.Annotation == "" {
+				return fmt.Errorf("spec.backends[%s].patches[%d]: set path or annotation", key, i)
+			}
+			if patch.Path != "" {
+				if seenPath[patch.Path] {
+					return fmt.Errorf("spec.backends[%s]: duplicate path %q", key, patch.Path)
+				}
+				seenPath[patch.Path] = true
+				paths++
+			}
+		}
+		// Zero paths (annotation-only or empty) is allowed: external scaler entry.
+	}
+	return nil
 }

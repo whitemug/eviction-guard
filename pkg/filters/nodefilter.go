@@ -6,7 +6,6 @@ See LICENSE in the project root for license information.
 */
 
 // Package filters evaluates EvictionGuardPolicy.spec.nodeFilter against Node objects.
-// Other plugins can register additional named filters via Register.
 package filters
 
 import (
@@ -30,22 +29,6 @@ const (
 type Filter interface {
 	Name() string
 	Matches(node *corev1.Node) (bool, error)
-}
-
-// Factory builds a Filter from opaque config (used by compiled-in plugins).
-type Factory func(cfg []byte) (Filter, error)
-
-var registry = map[string]Factory{}
-
-// Register adds a named filter factory. Safe to call from init().
-func Register(name string, f Factory) {
-	registry[name] = f
-}
-
-// Lookup returns a registered factory.
-func Lookup(name string) (Factory, bool) {
-	f, ok := registry[name]
-	return f, ok
 }
 
 // FromSpec compiles the CRD NodeFilter into a Filter. Empty spec matches all nodes.

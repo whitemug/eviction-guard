@@ -1,15 +1,17 @@
 apiVersion: v2
 name: eviction-guard
-description: Proactive Kubernetes capacity for predicted node disruption. Other operators integrate via EvictionGuardPolicy (nodeFilter) and EvictionGuardWindow.
+description: Proactive spare capacity and eviction gating for predicted node disruption (Karpenter, Spot, cordon).
 type: application
-version: 0.1.1
-appVersion: "0.1.1"
+kubeVersion: ">=1.27.0-0"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - kubernetes
   - karpenter
   - disruption
   - autoscaling
-  - pdb
+  - eviction
+  - webhook
 home: https://github.com/whitemug/eviction-guard
 sources:
   - https://github.com/whitemug/eviction-guard

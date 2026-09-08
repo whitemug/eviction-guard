@@ -14,16 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ScaleBackendType is the capacity-mutation strategy Eviction Guard uses.
-// +kubebuilder:validation:Enum=deployment;hpa-min;crd
-type ScaleBackendType string
-
-const (
-	ScaleBackendDeployment ScaleBackendType = "deployment"
-	ScaleBackendHPAMin     ScaleBackendType = "hpa-min"
-	ScaleBackendCRD        ScaleBackendType = "crd"
-)
-
 // DisruptionSignal identifies a node condition that marks the node as about to evict pods.
 // +kubebuilder:validation:Enum=KarpenterDisrupted;KarpenterDeleteRequested;OutOfService;SpotInterrupted;NodeCordoned
 type DisruptionSignal string
@@ -33,7 +23,9 @@ const (
 	SignalKarpenterDeleteRequested DisruptionSignal = "KarpenterDeleteRequested"
 	SignalOutOfService             DisruptionSignal = "OutOfService"
 	SignalSpotInterrupted          DisruptionSignal = "SpotInterrupted"
-	// SignalNodeCordoned is spec.unschedulable=true. Opt-in only — not a default.
+	// SignalNodeCordoned is spec.unschedulable=true (cordon / drain prelude).
+	// Included in defaults so any drain path opens a window; use nodeFilter to
+	// limit which pools react to cordon-only events.
 	SignalNodeCordoned DisruptionSignal = "NodeCordoned"
 )
 
@@ -46,7 +38,8 @@ type TaintMatch struct {
 	// Value, if set, must equal the taint value.
 	Value string `json:"value,omitempty"`
 
-	// Effect, if set, must equal the taint effect (NoSchedule, PreferNoSchedule, NoExecute).
+	// Effect, if set, must equal the taint effect.
+	// +kubebuilder:validation:Enum=NoSchedule;PreferNoSchedule;NoExecute
 	Effect corev1.TaintEffect `json:"effect,omitempty"`
 }
 
@@ -138,23 +131,50 @@ type StampSpec struct {
 	WindowUntilKey string `json:"windowUntilKey,omitempty"`
 }
 
+// BackendPatch is one write applied to a catalog backend target.
+// Path patches set integer capacity; several paths are allowed (e.g. HPA min+max).
+// Annotation-only patches are visibility keys. An entry may omit paths entirely
+// (empty patches) for an external scaler such as KEDA — Eviction Guard opens a
+// Window and publishes metrics but does not patch that object.
+// +kubebuilder:validation:XValidation:rule="has(self.path) || has(self.annotation)",message="backends patch must set path or annotation"
+type BackendPatch struct {
+	// Path is a dotted JSON path to an integer field (e.g. spec.replicas, spec.minReplicas).
+	Path string `json:"path,omitempty"`
+
+	// Annotation is an annotation key written during the window (cleared on scale-back).
+	Annotation string `json:"annotation,omitempty"`
+}
+
+// BackendCatalogEntry describes how to talk to one kind of object for a named backend key.
+type BackendCatalogEntry struct {
+	// APIVersion of the target object (e.g. apps/v1, keda.sh/v1alpha1).
+	// +kubebuilder:validation:MinLength=1
+	APIVersion string `json:"apiVersion"`
+
+	// Kind of the target object (e.g. Deployment, ScaledObject).
+	// +kubebuilder:validation:MinLength=1
+	Kind string `json:"kind"`
+
+	// Patches lists integer capacity paths and optional annotation writes.
+	// Empty (or omitted) means external: declare the object on scale-backend but do
+	// not patch it (typical for KEDA-owned ScaledObjects).
+	// +listType=atomic
+	Patches []BackendPatch `json:"patches,omitempty"`
+}
+
 // EvictionGuardPolicySpec defines the desired state of EvictionGuardPolicy.
 type EvictionGuardPolicySpec struct {
 	// NodeFilter restricts which nodes this policy monitors.
 	// Empty matches every node in the cluster.
 	NodeFilter NodeFilter `json:"nodeFilter,omitempty"`
 
-	// WorkloadSelector selects Deployments this policy may scale.
-	// Defaults to {matchLabels: {"eviction-guard.io/enabled": "true"}}.
+	// WorkloadSelector further restricts Deployments this policy may scale.
+	// Empty: any Deployment with pods carrying eviction-guard.io/protected.
 	WorkloadSelector *metav1.LabelSelector `json:"workloadSelector,omitempty"`
 
 	// NamespaceSelector restricts which namespaces are considered.
 	// Empty matches all namespaces.
 	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
-
-	// RequirePDB, when true, only scales workloads that have a matching PodDisruptionBudget.
-	// Defaults to true.
-	RequirePDB *bool `json:"requirePDB,omitempty"`
 
 	// SpareReplicas is the replica buffer added when at least one replica is at risk
 	// (Strategy A in the design). Defaults to 1.
@@ -171,18 +191,19 @@ type EvictionGuardPolicySpec struct {
 	// +kubebuilder:validation:Minimum=0
 	MaxConcurrentWindows *int32 `json:"maxConcurrentWindows,omitempty"`
 
-	// DefaultBackend is used when the workload does not set eviction-guard.io/scale-backend.
-	// Defaults to "deployment". Combined with AdditionalBackends.
-	DefaultBackend ScaleBackendType `json:"defaultBackend,omitempty"`
+	// Backends is a named catalog of how to patch capacity (and optional annotations).
+	// Protected Deployments must set eviction-guard.io/scale-backend to list keys
+	// into this map (e.g. "deployment,hpa,webapp"). There is no default bind.
+	// Token order is patch order for entries with integer paths; the first
+	// patched path is the SpareReady primary. Empty-patch entries are external.
+	// Keys must be DNS-1123 labels (lowercase).
+	// +kubebuilder:validation:MinProperties=1
+	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'))",message="backend keys must be DNS-1123 labels"
+	Backends map[string]BackendCatalogEntry `json:"backends"`
 
-	// AdditionalBackends are applied together with DefaultBackend when the
-	// workload annotation is unset. Typical pair: deployment + hpa-min.
-	// If eviction-guard.io/scale-backend is set, it is the complete list.
-	// +listType=atomic
-	AdditionalBackends []ScaleBackendType `json:"additionalBackends,omitempty"`
-
-	// ScaleBackAfter is the cooldown after vulnerable nodes have cleared and spare
-	// pods are Ready off those nodes. Defaults to 15m.
+	// ScaleBackAfter is how long the window stays Cooling after capacity is
+	// restored (at-risk pods gone and spare Ready). Defaults to 1m.
 	// A workload may override with eviction-guard.io/scale-back-after.
 	ScaleBackAfter *metav1.Duration `json:"scaleBackAfter,omitempty"`
 
@@ -198,7 +219,9 @@ type EvictionGuardPolicySpec struct {
 	Stamp StampSpec `json:"stamp,omitempty"`
 
 	// DisruptionSignals lists which built-in node signals mark a node as vulnerable.
-	// Empty enables the built-in defaults: KarpenterDisrupted, KarpenterDeleteRequested, OutOfService.
+	// Empty enables the built-in defaults: KarpenterDisrupted, KarpenterDeleteRequested,
+	// OutOfService, NodeCordoned. Early Karpenter/cloud markers buy Ready time;
+	// NodeCordoned covers drain paths that only cordon.
 	DisruptionSignals []DisruptionSignal `json:"disruptionSignals,omitempty"`
 
 	// CustomSignals are extra matchers you configure yourself (GKE/AKS/CA taints,
@@ -224,8 +247,19 @@ type EvictionGuardPolicyStatus struct {
 	// for a window slot because MaxConcurrentWindows is already reached.
 	DeferredWorkloads int32 `json:"deferredWorkloads,omitempty"`
 
+	// Conditions include Ready and BackendsAuthorized (False when a catalog
+	// target patch was Forbidden — grant Helm extraClusterRoleRules).
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
+
+const (
+	// ConditionBackendsAuthorized is False when scale-up hit Forbidden on a
+	// catalog target (missing RBAC for that apiVersion/kind).
+	ConditionBackendsAuthorized = "BackendsAuthorized"
+
+	ReasonMissingRBAC = "MissingRBAC"
+	ReasonAuthorized  = "Authorized"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -290,39 +324,6 @@ func (p *EvictionGuardPolicy) MaxConcurrentWindowsOrDefault() int32 {
 		return DefaultMaxConcurrentWindows
 	}
 	return *p.Spec.MaxConcurrentWindows
-}
-
-func (p *EvictionGuardPolicy) RequirePDBOrDefault() bool {
-	if p.Spec.RequirePDB == nil {
-		return true
-	}
-	return *p.Spec.RequirePDB
-}
-
-func (p *EvictionGuardPolicy) DefaultBackendOrDefault() ScaleBackendType {
-	if p.Spec.DefaultBackend == "" {
-		return ScaleBackendDeployment
-	}
-	return p.Spec.DefaultBackend
-}
-
-func (p *EvictionGuardPolicy) BackendsOrDefault() []ScaleBackendType {
-	out := []ScaleBackendType{p.DefaultBackendOrDefault()}
-	out = append(out, p.Spec.AdditionalBackends...)
-	return uniqueBackends(out)
-}
-
-func uniqueBackends(in []ScaleBackendType) []ScaleBackendType {
-	seen := map[ScaleBackendType]bool{}
-	var out []ScaleBackendType
-	for _, b := range in {
-		if b == "" || seen[b] {
-			continue
-		}
-		seen[b] = true
-		out = append(out, b)
-	}
-	return out
 }
 
 func (p *EvictionGuardPolicy) ScaleBackAfterOrDefault() metav1.Duration {

@@ -62,21 +62,64 @@ spec:
           spec:
             description: EvictionGuardPolicySpec defines the desired state of EvictionGuardPolicy.
             properties:
-              additionalBackends:
+              backends:
+                additionalProperties:
+                  description: BackendCatalogEntry describes how to talk to one kind
+                    of object for a named backend key.
+                  properties:
+                    apiVersion:
+                      description: APIVersion of the target object (e.g. apps/v1,
+                        keda.sh/v1alpha1).
+                      minLength: 1
+                      type: string
+                    kind:
+                      description: Kind of the target object (e.g. Deployment, ScaledObject).
+                      minLength: 1
+                      type: string
+                    patches:
+                      description: |-
+                        Patches lists integer capacity paths and optional annotation writes.
+                        Empty (or omitted) means external: declare the object on scale-backend but do
+                        not patch it (typical for KEDA-owned ScaledObjects).
+                      items:
+                        description: |-
+                          BackendPatch is one write applied to a catalog backend target.
+                          Path patches set integer capacity; several paths are allowed (e.g. HPA min+max).
+                          Annotation-only patches are visibility keys. An entry may omit paths entirely
+                          (empty patches) for an external scaler such as KEDA — Eviction Guard opens a
+                          Window and publishes metrics but does not patch that object.
+                        properties:
+                          annotation:
+                            description: Annotation is an annotation key written during
+                              the window (cleared on scale-back).
+                            type: string
+                          path:
+                            description: Path is a dotted JSON path to an integer
+                              field (e.g. spec.replicas, spec.minReplicas).
+                            type: string
+                        type: object
+                        x-kubernetes-validations:
+                        - message: backends patch must set path or annotation
+                          rule: has(self.path) || has(self.annotation)
+                      type: array
+                      x-kubernetes-list-type: atomic
+                  required:
+                  - apiVersion
+                  - kind
+                  type: object
                 description: |-
-                  AdditionalBackends are applied together with DefaultBackend when the
-                  workload annotation is unset. Typical pair: deployment + hpa-min.
-                  If eviction-guard.io/scale-backend is set, it is the complete list.
-                items:
-                  description: ScaleBackendType is the capacity-mutation strategy
-                    Eviction Guard uses.
-                  enum:
-                  - deployment
-                  - hpa-min
-                  - crd
-                  type: string
-                type: array
-                x-kubernetes-list-type: atomic
+                  Backends is a named catalog of how to patch capacity (and optional annotations).
+                  Protected Deployments must set eviction-guard.io/scale-backend to list keys
+                  into this map (e.g. "deployment,hpa,webapp"). There is no default bind.
+                  Token order is patch order for entries with integer paths; the first
+                  patched path is the SpareReady primary. Empty-patch entries are external.
+                  Keys must be DNS-1123 labels (lowercase).
+                maxProperties: 32
+                minProperties: 1
+                type: object
+                x-kubernetes-validations:
+                - message: backend keys must be DNS-1123 labels
+                  rule: self.all(k, k.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'))
               customSignals:
                 description: |-
                   CustomSignals are extra matchers you configure yourself (GKE/AKS/CA taints,
@@ -129,8 +172,11 @@ spec:
                         unless Value/Effect are set.
                       properties:
                         effect:
-                          description: Effect, if set, must equal the taint effect
-                            (NoSchedule, PreferNoSchedule, NoExecute).
+                          description: Effect, if set, must equal the taint effect.
+                          enum:
+                          - NoSchedule
+                          - PreferNoSchedule
+                          - NoExecute
                           type: string
                         key:
                           description: Key is the taint key to match.
@@ -149,19 +195,12 @@ spec:
                   - message: customSignals entry must set taint, annotation, or label
                     rule: has(self.taint) || has(self.annotation) || has(self.label)
                 type: array
-              defaultBackend:
-                description: |-
-                  DefaultBackend is used when the workload does not set eviction-guard.io/scale-backend.
-                  Defaults to "deployment". Combined with AdditionalBackends.
-                enum:
-                - deployment
-                - hpa-min
-                - crd
-                type: string
               disruptionSignals:
                 description: |-
                   DisruptionSignals lists which built-in node signals mark a node as vulnerable.
-                  Empty enables the built-in defaults: KarpenterDisrupted, KarpenterDeleteRequested, OutOfService.
+                  Empty enables the built-in defaults: KarpenterDisrupted, KarpenterDeleteRequested,
+                  OutOfService, NodeCordoned. Early Karpenter/cloud markers buy Ready time;
+                  NodeCordoned covers drain paths that only cordon.
                 items:
                   description: DisruptionSignal identifies a node condition that marks
                     the node as about to evict pods.
@@ -374,8 +413,11 @@ spec:
                         Value and Effect are optional filters.
                       properties:
                         effect:
-                          description: Effect, if set, must equal the taint effect
-                            (NoSchedule, PreferNoSchedule, NoExecute).
+                          description: Effect, if set, must equal the taint effect.
+                          enum:
+                          - NoSchedule
+                          - PreferNoSchedule
+                          - NoExecute
                           type: string
                         key:
                           description: Key is the taint key to match.
@@ -394,15 +436,10 @@ spec:
                       type: string
                     type: array
                 type: object
-              requirePDB:
-                description: |-
-                  RequirePDB, when true, only scales workloads that have a matching PodDisruptionBudget.
-                  Defaults to true.
-                type: boolean
               scaleBackAfter:
                 description: |-
-                  ScaleBackAfter is the cooldown after vulnerable nodes have cleared and spare
-                  pods are Ready off those nodes. Defaults to 15m.
+                  ScaleBackAfter is how long the window stays Cooling after capacity is
+                  restored (at-risk pods gone and spare Ready). Defaults to 1m.
                   A workload may override with eviction-guard.io/scale-back-after.
                 type: string
               spareReplicas:
@@ -444,8 +481,8 @@ spec:
                 type: object
               workloadSelector:
                 description: |-
-                  WorkloadSelector selects Deployments this policy may scale.
-                  Defaults to {matchLabels: {"eviction-guard.io/enabled": "true"}}.
+                  WorkloadSelector further restricts Deployments this policy may scale.
+                  Empty: any Deployment with pods carrying eviction-guard.io/protected.
                 properties:
                   matchExpressions:
                     description: matchExpressions is a list of label selector requirements.
@@ -490,6 +527,8 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+            required:
+            - backends
             type: object
           status:
             description: EvictionGuardPolicyStatus is observed state for operators
@@ -501,6 +540,9 @@ spec:
                 format: int32
                 type: integer
               conditions:
+                description: |-
+                  Conditions include Ready and BackendsAuthorized (False when a catalog
+                  target patch was Forbidden — grant Helm extraClusterRoleRules).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

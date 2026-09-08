@@ -1,0 +1,24 @@
+# KEDA Recipe A: EVG patches ScaledObject.minReplicaCount (not the HPA).
+# Pair with examples/workload-keda.yaml. Grant Helm extraClusterRoleRules for keda.sh/scaledobjects.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: keda-minreplicas-demo
+spec:
+  nodeFilter:
+    capacityTypes:
+      - spot
+  spareReplicas: 1
+  maxBuffer: 4
+  backends:
+    scaledobject:
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      patches:
+        - path: spec.minReplicaCount
+  scaleBackAfter: 1m
+  disruptionSignals:
+    - KarpenterDisrupted
+    - KarpenterDeleteRequested
+    - OutOfService
+    - NodeCordoned

@@ -10,11 +10,10 @@ package v1alpha1
 import (
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const DefaultScaleBackAfter = 15 * time.Minute
+const DefaultScaleBackAfter = time.Minute
 
 // WindowPhase is the lifecycle of a disruption window.
 // +kubebuilder:validation:Enum=Open;Cooling;Held;Closed
@@ -46,9 +45,14 @@ type WorkloadReference struct {
 	Namespace string `json:"namespace"`
 }
 
-// ScaleAction is one object Eviction Guard patched for a window (Deployment, HPA, or CR).
+// ScaleAction is one object Eviction Guard patched for a window.
+// Actions are stored in eviction-guard.io/scale-backend token order for patched paths.
+// Scale-up and scale-back walk that same order; actions[0] is the SpareReady primary
+// when Actions is non-empty. Empty Actions means every bound catalog entry was external.
 type ScaleAction struct {
-	Backend ScaleBackendType `json:"backend"`
+	// Key is the policy.spec.backends catalog key (e.g. deployment, hpa, webapp).
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
 
 	APIVersion string `json:"apiVersion,omitempty"`
 	Kind       string `json:"kind,omitempty"`
@@ -56,7 +60,7 @@ type ScaleAction struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// FieldPath is used by the crd backend (default spec.replicas).
+	// FieldPath is the integer capacity field that was patched.
 	FieldPath string `json:"fieldPath,omitempty"`
 
 	// Baseline is this object's value before scale-up.
@@ -76,31 +80,28 @@ type EvictionGuardWindowSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	PolicyName string `json:"policyName"`
 
-	// Target is the workload whose capacity was raised.
+	// Target is the workload (Deployment) that owns the protected pods.
 	Target WorkloadReference `json:"target"`
 
-	// Backend is the primary scaling backend (first action). Kept for kubectl columns
-	// and older windows that have no spec.actions.
-	Backend ScaleBackendType `json:"backend"`
-
-	// BackendTarget, if set, is the object the primary backend patches.
-	BackendTarget *corev1.ObjectReference `json:"backendTarget,omitempty"`
-
-	// Actions is the full fan-out: Deployment and/or HPA and/or CR, each with its
-	// own baseline so scale-back restores every object independently.
+	// Actions is the capacity fan-out: each integer path patched for this window,
+	// with its own baseline for independent restore. Empty when every bound catalog
+	// entry is external (no path patches) — e.g. KEDA owns scaling.
+	// +listType=atomic
 	Actions []ScaleAction `json:"actions,omitempty"`
 
-	// Baseline is the primary backend's replica count before scale-up.
+	// Baseline is the primary capacity before scale-up (first patched action, or the
+	// Deployment replica count when Actions is empty). Used for SpareReady.
 	Baseline int32 `json:"baseline"`
 
-	// ScaledTo is the replica (or minReplicas) count Eviction Guard set.
+	// ScaledTo is the shared desired pod capacity for this window.
 	ScaledTo int32 `json:"scaledTo"`
 
 	// VulnerableNodes are the node names that triggered this window.
 	VulnerableNodes []string `json:"vulnerableNodes,omitempty"`
 
-	// WindowUntil is when scale-back becomes eligible. Set only after vulnerable
-	// nodes have cleared and status.spareReady is true (Cooling). Empty while Open.
+	// WindowUntil is when the window may close. Set when Cooling starts, which is
+	// also when capacity is restored (at-risk pods gone and spare Ready, or
+	// maxWindow). Empty while Open.
 	WindowUntil *metav1.Time `json:"windowUntil,omitempty"`
 }
 
@@ -134,7 +135,7 @@ type EvictionGuardWindowStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=egw,categories=eviction-guard
 // +kubebuilder:printcolumn:name="Policy",type=string,JSONPath=.spec.policyName
-// +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=.spec.backend
+// +kubebuilder:printcolumn:name="Key",type=string,JSONPath=.spec.actions[0].key
 // +kubebuilder:printcolumn:name="Baseline",type=integer,JSONPath=.spec.baseline
 // +kubebuilder:printcolumn:name="ScaledTo",type=integer,JSONPath=.spec.scaledTo
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
@@ -174,26 +175,18 @@ func (w *EvictionGuardWindow) IsActive() bool {
 	}
 }
 
-// ScaleActions is spec.actions, or a single synthetic action for windows
-// created before multi-backend (spec.backend + spec.backendTarget).
+// ScaleActions returns spec.actions (the only capacity fan-out record).
 func (w *EvictionGuardWindow) ScaleActions() []ScaleAction {
-	if len(w.Spec.Actions) > 0 {
-		return w.Spec.Actions
+	if w == nil {
+		return nil
 	}
-	a := ScaleAction{
-		Backend:    w.Spec.Backend,
-		APIVersion: w.Spec.Target.APIVersion,
-		Kind:       w.Spec.Target.Kind,
-		Namespace:  w.Spec.Target.Namespace,
-		Name:       w.Spec.Target.Name,
-		Baseline:   w.Spec.Baseline,
-		ScaledTo:   w.Spec.ScaledTo,
+	return w.Spec.Actions
+}
+
+// PrimaryAction is the first scale action (capacity primary for SpareReady math).
+func (w *EvictionGuardWindow) PrimaryAction() *ScaleAction {
+	if w == nil || len(w.Spec.Actions) == 0 {
+		return nil
 	}
-	if w.Spec.BackendTarget != nil && w.Spec.BackendTarget.Name != "" {
-		a.APIVersion = w.Spec.BackendTarget.APIVersion
-		a.Kind = w.Spec.BackendTarget.Kind
-		a.Namespace = w.Spec.BackendTarget.Namespace
-		a.Name = w.Spec.BackendTarget.Name
-	}
-	return []ScaleAction{a}
+	return &w.Spec.Actions[0]
 }

@@ -1,0 +1,50 @@
+# Argo CD — ignore Eviction Guard capacity fields
+#
+# Attach these snippets to Applications that manage Deployments / HPAs
+# opted into Eviction Guard. RespectIgnoreDifferences is required so
+# sync does not overwrite live patches during an open window.
+#
+# Tradeoff: git changes to ignored paths are not applied by Argo.
+# See docs/gitops.md.
+
+# --- inside Application.spec ---
+# syncPolicy:
+#   syncOptions:
+#     - RespectIgnoreDifferences=true
+# ignoreDifferences:
+#   - group: apps
+#     kind: Deployment
+#     jsonPointers:
+#       - /spec/replicas
+#   - group: autoscaling
+#     kind: HorizontalPodAutoscaler
+#     jsonPointers:
+#       - /spec/minReplicas
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: EXAMPLE-replace-me
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/app.git
+    targetRevision: HEAD
+    path: deploy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    syncOptions:
+      - RespectIgnoreDifferences=true
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/minReplicas
+        - /spec/maxReplicas

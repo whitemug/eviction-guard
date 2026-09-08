@@ -14,6 +14,7 @@ import (
 
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -44,14 +45,28 @@ func TestDeploymentWebhook(t *testing.T) {
 				egv1a1.ScaleBackendAnnotation: "deployment",
 			},
 		},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					egv1a1.ProtectedLabel: "true",
+				}},
+			},
+		},
 	}
 	resp := v.Handle(context.Background(), mustReq(t, ok))
 	if !resp.Allowed {
 		t.Fatalf("allowed=false: %s", resp.Result.Message)
 	}
 
+	missing := ok.DeepCopy()
+	missing.Annotations = nil
+	resp = v.Handle(context.Background(), mustReq(t, missing))
+	if resp.Allowed {
+		t.Fatal("expected deny when protected without scale-backend")
+	}
+
 	bad := ok.DeepCopy()
-	bad.Annotations[egv1a1.ScaleBackendAnnotation] = "nope"
+	bad.Annotations[egv1a1.ScaleBackendAnnotation] = "=missing-key"
 	resp = v.Handle(context.Background(), mustReq(t, bad))
 	if resp.Allowed {
 		t.Fatal("expected deny")
@@ -62,7 +77,16 @@ func TestPolicyWebhook(t *testing.T) {
 	v := &policyValidator{decoder: decoder(t)}
 	ok := &egv1a1.EvictionGuardPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "spot"},
-		Spec:       egv1a1.EvictionGuardPolicySpec{NodeFilter: egv1a1.NodeFilter{NamePattern: "spot-*"}},
+		Spec: egv1a1.EvictionGuardPolicySpec{
+			NodeFilter: egv1a1.NodeFilter{NamePattern: "spot-*"},
+			Backends: map[string]egv1a1.BackendCatalogEntry{
+				"deployment": {
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Patches:    []egv1a1.BackendPatch{{Path: "spec.replicas"}},
+				},
+			},
+		},
 	}
 	resp := v.Handle(context.Background(), mustReq(t, ok))
 	if !resp.Allowed {

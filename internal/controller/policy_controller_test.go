@@ -15,11 +15,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
@@ -43,6 +41,21 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+func defaultCatalogBackends() map[string]egv1a1.BackendCatalogEntry {
+	return map[string]egv1a1.BackendCatalogEntry{
+		"deployment": {
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Patches:    []egv1a1.BackendPatch{{Path: "spec.replicas"}},
+		},
+		"hpa": {
+			APIVersion: "autoscaling/v1",
+			Kind:       "HorizontalPodAutoscaler",
+			Patches:    []egv1a1.BackendPatch{{Path: "spec.minReplicas"}},
+		},
+	}
+}
+
 func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) (client.Client, *PolicyReconciler, *WindowReconciler) {
 	t.Helper()
 	scheme := testScheme(t)
@@ -52,14 +65,19 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "web",
 			Namespace: "app",
-			Labels:    map[string]string{egv1a1.EnabledLabel: "true"},
 			UID:       "dep-uid",
+			Annotations: map[string]string{
+				egv1a1.ScaleBackendAnnotation: "deployment",
+			},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}},
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"app":                 "web",
+					egv1a1.ProtectedLabel: "true",
+				}},
 			},
 		},
 	}
@@ -77,7 +95,10 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "web-pod",
 			Namespace: "app",
-			Labels:    map[string]string{"app": "web"},
+			Labels: map[string]string{
+				"app":                 "web",
+				egv1a1.ProtectedLabel: "true",
+			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-rs", UID: "rs-uid", Controller: &trueVal,
 			}},
@@ -88,13 +109,7 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 		ObjectMeta: metav1.ObjectMeta{Name: "worker-1", Labels: nodeLabels},
 		Spec:       corev1.NodeSpec{Taints: taints},
 	}
-	pdb := &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
-		Spec: policyv1.PodDisruptionBudgetSpec{
-			MinAvailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 2},
-			Selector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
-		},
-	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "app"}}
 	policy := &egv1a1.EvictionGuardPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "spot-workers", UID: "policy-uid", Finalizers: []string{egv1a1.PolicyFinalizer}},
 		Spec: egv1a1.EvictionGuardPolicySpec{
@@ -103,11 +118,12 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 			},
 			SpareReplicas: ptr.To(int32(1)),
 			MaxBuffer:     ptr.To(int32(4)),
+			Backends:      defaultCatalogBackends(),
 		},
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}).
+		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &autoscalingv1.HorizontalPodAutoscaler{}).
 		WithIndex(&corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
 			n := o.(*corev1.Pod).Spec.NodeName
 			if n == "" {
@@ -115,7 +131,7 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 			}
 			return []string{n}
 		}).
-		WithObjects(dep, rs, pod, node, pdb, policy).
+		WithObjects(ns, dep, rs, pod, node, policy).
 		Build()
 
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -132,7 +148,10 @@ func putSafeReadyPods(t *testing.T, c client.Client, n int) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "web-safe-" + string(rune('a'+i)),
 				Namespace: "app",
-				Labels:    map[string]string{"app": "web"},
+				Labels: map[string]string{
+					"app":                 "web",
+					egv1a1.ProtectedLabel: "true",
+				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-rs", UID: "rs-uid", Controller: &trueVal,
 				}},
@@ -145,6 +164,38 @@ func putSafeReadyPods(t *testing.T, c client.Client, n int) {
 		if err := c.Create(context.Background(), p); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestPolicyIgnoresUnprotectedPods(t *testing.T) {
+	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web-pod"}, pod); err != nil {
+		t.Fatal(err)
+	}
+	delete(pod.Labels, egv1a1.ProtectedLabel)
+	if err := c.Update(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	delete(dep.Spec.Template.Labels, egv1a1.ProtectedLabel)
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if *dep.Spec.Replicas != 3 {
+		t.Fatalf("replicas=%d, want 3 (pod not protected)", *dep.Spec.Replicas)
 	}
 }
 
@@ -193,7 +244,7 @@ func TestPolicyScalesUpMatchingVulnerableNode(t *testing.T) {
 	if win.Spec.Baseline != 3 || win.Spec.ScaledTo != 4 {
 		t.Fatalf("window baseline=%d scaledTo=%d", win.Spec.Baseline, win.Spec.ScaledTo)
 	}
-	if len(win.Spec.Actions) != 1 || win.Spec.Actions[0].Backend != egv1a1.ScaleBackendDeployment {
+	if len(win.Spec.Actions) != 1 || win.Spec.Actions[0].Kind != "Deployment" || win.Spec.Actions[0].Key != "deployment" {
 		t.Fatalf("actions=%+v", win.Spec.Actions)
 	}
 	if win.Status.Phase != egv1a1.WindowPhaseOpen {
@@ -245,16 +296,45 @@ func TestWindowScaleBackAfterCooldown(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
 		t.Fatal(err)
 	}
-	wantUntil := time.Date(2026, 8, 30, 12, 15, 0, 0, time.UTC)
+	wantUntil := time.Date(2026, 8, 30, 12, 1, 0, 0, time.UTC)
 	if win.Spec.WindowUntil == nil || !win.Spec.WindowUntil.Time.Equal(wantUntil) {
 		t.Fatalf("windowUntil=%v, want %s after cooldown starts", win.Spec.WindowUntil, wantUntil)
 	}
 	if res.RequeueAfter <= 0 {
 		t.Fatalf("expected cooldown requeue, got %+v", res)
 	}
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if *dep.Spec.Replicas != 3 {
+		t.Fatalf("replicas=%d, want 3 at cooldown start (do not wait to spawn a replacement)", *dep.Spec.Replicas)
+	}
 
 	wr.Now = func() time.Time { return fixed.Add(20 * time.Minute) }
 	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err == nil {
+		t.Fatal("expected window deleted after cooldown")
+	}
+}
+
+func TestWindowScalesBackWhenAtRiskPodGoneNodeStillTainted(t *testing.T) {
+	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	putSafeReadyPods(t, c, 3)
+	if err := c.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-pod", Namespace: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	winName := types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: winName}); err != nil {
 		t.Fatal(err)
 	}
 	dep := &appsv1.Deployment{}
@@ -262,7 +342,14 @@ func TestWindowScaleBackAfterCooldown(t *testing.T) {
 		t.Fatal(err)
 	}
 	if *dep.Spec.Replicas != 3 {
-		t.Fatalf("replicas=%d, want 3 after scale-back", *dep.Spec.Replicas)
+		t.Fatalf("replicas=%d, want 3 after at-risk pod gone (node still tainted)", *dep.Spec.Replicas)
+	}
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, winName, win); err != nil {
+		t.Fatal(err)
+	}
+	if win.Status.Phase != egv1a1.WindowPhaseCooling {
+		t.Fatalf("phase=%s, want Cooling", win.Status.Phase)
 	}
 }
 
@@ -370,9 +457,12 @@ func putHPA(t *testing.T, c client.Client, min int32) {
 				Kind: "Deployment", Name: "web", APIVersion: "apps/v1",
 			},
 		},
-		Status: autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 3, DesiredReplicas: 3},
 	}
 	if err := c.Create(context.Background(), hpa); err != nil {
+		t.Fatal(err)
+	}
+	hpa.Status = autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 3, DesiredReplicas: 3}
+	if err := c.Status().Update(context.Background(), hpa); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -386,7 +476,7 @@ func TestPolicyScalesDeploymentAndHPA(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa-min"}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa"}
 	if err := c.Update(ctx, dep); err != nil {
 		t.Fatal(err)
 	}
@@ -415,13 +505,151 @@ func TestPolicyScalesDeploymentAndHPA(t *testing.T) {
 	if len(win.Spec.Actions) != 2 {
 		t.Fatalf("actions=%d %+v", len(win.Spec.Actions), win.Spec.Actions)
 	}
-	byBackend := map[egv1a1.ScaleBackendType]egv1a1.ScaleAction{}
+	byKey := map[string]egv1a1.ScaleAction{}
 	for _, a := range win.Spec.Actions {
-		byBackend[a.Backend] = a
+		byKey[a.Key] = a
 	}
-	if byBackend[egv1a1.ScaleBackendDeployment].Baseline != 3 || byBackend[egv1a1.ScaleBackendHPAMin].Baseline != 2 {
-		t.Fatalf("baselines deploy=%d hpa=%d", byBackend[egv1a1.ScaleBackendDeployment].Baseline, byBackend[egv1a1.ScaleBackendHPAMin].Baseline)
+	if byKey["deployment"].Baseline != 3 || byKey["hpa"].Baseline != 2 {
+		t.Fatalf("baselines deploy=%d hpa=%d", byKey["deployment"].Baseline, byKey["hpa"].Baseline)
 	}
+	if byKey["deployment"].Name != "web" || byKey["hpa"].Name != "web" {
+		t.Fatalf("catalog keys missing on actions: %+v", win.Spec.Actions)
+	}
+	// Binding order from the annotation is preserved on the Window.
+	if win.Spec.Actions[0].Key != "deployment" || win.Spec.Actions[1].Key != "hpa" {
+		t.Fatalf("action order=%+v, want deployment then hpa", win.Spec.Actions)
+	}
+}
+
+func TestWindowHeldWhenHPAPastSpare(t *testing.T) {
+	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa"}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	putHPA(t, c, 2)
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := &corev1.Node{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "worker-1"}, node); err != nil {
+		t.Fatal(err)
+	}
+	node.Spec.Taints = nil
+	if err := c.Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	putSafeReadyPods(t, c, 3)
+
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	hpa.Status.DesiredReplicas = 6
+	hpa.Status.CurrentReplicas = 6
+	if err := c.Status().Update(ctx, hpa); err != nil {
+		t.Fatal(err)
+	}
+
+	winName := WindowName("spot-workers", "app", "web")
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
+		t.Fatal(err)
+	}
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
+		t.Fatal(err)
+	}
+	if win.Status.Phase != egv1a1.WindowPhaseHeld {
+		t.Fatalf("phase=%s, want Held", win.Status.Phase)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if *dep.Spec.Replicas != 4 {
+		t.Fatalf("replicas=%d, want still 4 while Held", *dep.Spec.Replicas)
+	}
+}
+
+func TestHPAOnlyRestoreClampsToCurrentReplicas(t *testing.T) {
+	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "hpa"}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	putHPA(t, c, 2)
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 3 {
+		t.Fatalf("minReplicas=%v, want 3 after scale-up (baseline 2 + spare)", hpa.Spec.MinReplicas)
+	}
+
+	node := &corev1.Node{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "worker-1"}, node); err != nil {
+		t.Fatal(err)
+	}
+	node.Spec.Taints = nil
+	if err := c.Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	putSafeReadyPods(t, c, 3)
+
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	// Below ScaledTo so we do not Held; CurrentReplicas above baseline so G4 clamp applies.
+	hpa.Status.DesiredReplicas = 3
+	hpa.Status.CurrentReplicas = 3
+	if err := c.Status().Update(ctx, hpa); err != nil {
+		t.Fatal(err)
+	}
+
+	winName := WindowName("spot-workers", "app", "web")
+	fixed := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	wr.Now = func() time.Time { return fixed }
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 3 {
+		t.Fatalf("minReplicas=%v, want 3 (clamped to currentReplicas, not baseline 2)", ptrVal(hpa.Spec.MinReplicas))
+	}
+}
+
+func ptrVal(p *int32) int32 {
+	if p == nil {
+		return -1
+	}
+	return *p
 }
 
 func TestWindowScaleBackRestoresDeploymentAndHPA(t *testing.T) {
@@ -433,7 +661,7 @@ func TestWindowScaleBackRestoresDeploymentAndHPA(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa-min"}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa"}
 	if err := c.Update(ctx, dep); err != nil {
 		t.Fatal(err)
 	}
@@ -463,27 +691,23 @@ func TestWindowScaleBackRestoresDeploymentAndHPA(t *testing.T) {
 	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
 		t.Fatal(err)
 	}
-	wr.Now = func() time.Time { return fixed.Add(20 * time.Minute) }
-	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
-		t.Fatal(err)
-	}
 
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
 	if *dep.Spec.Replicas != 3 {
-		t.Fatalf("replicas=%d, want 3 after scale-back", *dep.Spec.Replicas)
+		t.Fatalf("replicas=%d, want 3 at cooldown start", *dep.Spec.Replicas)
 	}
 	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
 		t.Fatal(err)
 	}
 	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 2 {
-		t.Fatalf("hpa minReplicas=%v, want 2 after scale-back", hpa.Spec.MinReplicas)
+		t.Fatalf("hpa minReplicas=%v, want 2 at cooldown start", hpa.Spec.MinReplicas)
 	}
 }
 
-func TestPolicyAdditionalBackendsWithoutAnnotation(t *testing.T) {
+func TestPolicyHPAOnlyRequiresScaleBackendAnnotation(t *testing.T) {
 	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
 		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
 	})
@@ -492,7 +716,13 @@ func TestPolicyAdditionalBackendsWithoutAnnotation(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: "spot-workers"}, policy); err != nil {
 		t.Fatal(err)
 	}
-	policy.Spec.AdditionalBackends = []egv1a1.ScaleBackendType{egv1a1.ScaleBackendHPAMin}
+	policy.Spec.Backends = map[string]egv1a1.BackendCatalogEntry{
+		"hpa": {
+			APIVersion: "autoscaling/v1",
+			Kind:       "HorizontalPodAutoscaler",
+			Patches:    []egv1a1.BackendPatch{{Path: "spec.minReplicas"}},
+		},
+	}
 	if err := c.Update(ctx, policy); err != nil {
 		t.Fatal(err)
 	}
@@ -501,12 +731,64 @@ func TestPolicyAdditionalBackendsWithoutAnnotation(t *testing.T) {
 	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, &egv1a1.EvictionGuardWindow{}); err == nil {
+		t.Fatal("window must not open without scale-backend listing hpa")
+	}
+
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "hpa"}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
 	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
 		t.Fatal(err)
 	}
-	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 4 {
-		t.Fatalf("hpa minReplicas=%v, want 4 from additionalBackends", hpa.Spec.MinReplicas)
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 3 {
+		t.Fatalf("hpa minReplicas=%v, want 3 after scale-backend annotation (baseline 2 + spare 1)", ptr.Deref(hpa.Spec.MinReplicas, -1))
+	}
+}
+
+func TestPolicyRequiresScaleBackendAnnotation(t *testing.T) {
+	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	putHPA(t, c, 2)
+
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	delete(dep.Annotations, egv1a1.ScaleBackendAnnotation)
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, &egv1a1.EvictionGuardWindow{}); err == nil {
+		t.Fatal("window must not open without scale-backend")
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 3 {
+		t.Fatalf("replicas=%v, want unchanged 3 without scale-backend", dep.Spec.Replicas)
+	}
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 2 {
+		t.Fatalf("hpa minReplicas=%v, want unchanged baseline 2", hpa.Spec.MinReplicas)
 	}
 }
 
@@ -519,7 +801,10 @@ func TestPolicyHonorsScaleBackAfterAnnotation(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	dep.Annotations = map[string]string{egv1a1.ScaleBackAfterAnnotation: "5m"}
+	dep.Annotations = map[string]string{
+		egv1a1.ScaleBackendAnnotation:   "deployment",
+		egv1a1.ScaleBackAfterAnnotation: "5m",
+	}
 	if err := c.Update(ctx, dep); err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +872,10 @@ func TestPolicyStampsDeploymentAnnotations(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	dep.Annotations = map[string]string{egv1a1.StampAnnotation: "true"}
+	dep.Annotations = map[string]string{
+		egv1a1.ScaleBackendAnnotation: "deployment",
+		egv1a1.StampAnnotation:        "true",
+	}
 	if err := c.Update(ctx, dep); err != nil {
 		t.Fatal(err)
 	}
@@ -628,7 +916,7 @@ func TestPolicyStampsDeploymentAnnotations(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	if dep.Annotations[egv1a1.StampWindowUntilKey] != "2026-08-30T12:15:00Z" {
+	if dep.Annotations[egv1a1.StampWindowUntilKey] != "2026-08-30T12:01:00Z" {
 		t.Fatalf("window-until after cooldown start=%v", dep.Annotations)
 	}
 }
@@ -643,14 +931,19 @@ func addOptedInWorkload(t *testing.T, c client.Client, name string) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "app",
-			Labels:    map[string]string{egv1a1.EnabledLabel: "true"},
 			UID:       uid,
+			Annotations: map[string]string{
+				egv1a1.ScaleBackendAnnotation: "deployment",
+			},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"app":                 name,
+					egv1a1.ProtectedLabel: "true",
+				}},
 			},
 		},
 	}
@@ -668,24 +961,67 @@ func addOptedInWorkload(t *testing.T, c client.Client, name string) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name + "-pod",
 			Namespace: "app",
-			Labels:    map[string]string{"app": name},
+			Labels: map[string]string{
+				"app":                 name,
+				egv1a1.ProtectedLabel: "true",
+			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: "apps/v1", Kind: "ReplicaSet", Name: name + "-rs", UID: rsUID, Controller: &trueVal,
 			}},
 		},
 		Spec: corev1.PodSpec{NodeName: "worker-1"},
 	}
-	pdb := &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "app"},
-		Spec: policyv1.PodDisruptionBudgetSpec{
-			MinAvailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 2},
-			Selector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
-		},
-	}
-	for _, obj := range []client.Object{dep, rs, pod, pdb} {
+	for _, obj := range []client.Object{dep, rs, pod} {
 		if err := c.Create(context.Background(), obj); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestPolicyContinuesAfterSiblingScaleFailure(t *testing.T) {
+	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	// Sorted before "web" — would previously abort the loop before web scaled.
+	addOptedInWorkload(t, c, "api")
+	api := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "api"}, api); err != nil {
+		t.Fatal(err)
+	}
+	api.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hipaa"}
+	if err := c.Update(ctx, api); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter != requeueDeferred {
+		t.Fatalf("requeue=%v, want %v to retry failed sibling", res.RequeueAfter, requeueDeferred)
+	}
+
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "api")}, &egv1a1.EvictionGuardWindow{}); err == nil {
+		t.Fatal("api must not get a window with invalid scale-backend")
+	}
+	webWin := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, webWin); err != nil {
+		t.Fatalf("web should still scale despite api failure: %v", err)
+	}
+	web := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, web); err != nil {
+		t.Fatal(err)
+	}
+	if web.Spec.Replicas == nil || *web.Spec.Replicas != 4 {
+		t.Fatalf("web replicas=%v, want 4", web.Spec.Replicas)
+	}
+	p := &egv1a1.EvictionGuardPolicy{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "spot-workers"}, p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Status.Conditions) == 0 || p.Status.Conditions[0].Status != metav1.ConditionFalse {
+		t.Fatalf("policy Ready=%v, want False summarizing api failure", p.Status.Conditions)
 	}
 }
 
@@ -759,7 +1095,10 @@ func TestPolicyUpdatesExistingWindowAtCap(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "api-pod-2",
 			Namespace: "app",
-			Labels:    map[string]string{"app": "api"},
+			Labels: map[string]string{
+				"app":                 "api",
+				egv1a1.ProtectedLabel: "true",
+			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "api-rs", UID: "api-rs-uid", Controller: &trueVal,
 			}},
@@ -889,9 +1228,16 @@ func TestMaxWindowForceCoolsStuckOpen(t *testing.T) {
 	if win.Status.Phase != egv1a1.WindowPhaseCooling || !win.Status.ForcedCool {
 		t.Fatalf("phase=%s forcedCool=%v, want Cooling+ForcedCool", win.Status.Phase, win.Status.ForcedCool)
 	}
-	wantUntil := opened.Add(45 * time.Minute)
+	wantUntil := opened.Add(31 * time.Minute)
 	if win.Spec.WindowUntil == nil || !win.Spec.WindowUntil.Time.Equal(wantUntil) {
 		t.Fatalf("windowUntil=%v, want %s", win.Spec.WindowUntil, wantUntil)
+	}
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if *dep.Spec.Replicas != 3 {
+		t.Fatalf("replicas=%d, want 3 at maxWindow cooldown start", *dep.Spec.Replicas)
 	}
 
 	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
@@ -908,7 +1254,6 @@ func TestMaxWindowForceCoolsStuckOpen(t *testing.T) {
 	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: winNN}); err != nil {
 		t.Fatal(err)
 	}
-	dep := &appsv1.Deployment{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
@@ -975,5 +1320,177 @@ func TestMaxWindowZeroIsUnlimited(t *testing.T) {
 	}
 	if win.Status.Phase != egv1a1.WindowPhaseOpen || win.Status.ForcedCool {
 		t.Fatalf("phase=%s forcedCool=%v, want Open (unlimited)", win.Status.Phase, win.Status.ForcedCool)
+	}
+}
+
+func TestFirstMatchingPolicyByNameOwnsWorkload(t *testing.T) {
+	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	// Lexicographically before spot-workers — should win when both match.
+	other := &egv1a1.EvictionGuardPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-pool", UID: "alpha-uid", Finalizers: []string{egv1a1.PolicyFinalizer}},
+		Spec: egv1a1.EvictionGuardPolicySpec{
+			NodeFilter:    egv1a1.NodeFilter{CapacityTypes: []string{"spot"}},
+			SpareReplicas: ptr.To(int32(1)),
+			MaxBuffer:     ptr.To(int32(4)),
+			Backends:      defaultCatalogBackends(),
+		},
+	}
+	if err := c.Create(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, &egv1a1.EvictionGuardWindow{}); err == nil {
+		t.Fatal("spot-workers must not open a window when alpha-pool wins by name")
+	}
+
+	prOther := &PolicyReconciler{Client: c, Scheme: pr.Scheme, Recorder: record.NewFakeRecorder(8), Now: pr.Now}
+	if _, err := prOther.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "alpha-pool"}}); err != nil {
+		t.Fatal(err)
+	}
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("alpha-pool", "app", "web")}, win); err != nil {
+		t.Fatal(err)
+	}
+	if win.Spec.PolicyName != "alpha-pool" {
+		t.Fatalf("policyName=%s", win.Spec.PolicyName)
+	}
+}
+
+func TestPolicyPinOverridesNameOrder(t *testing.T) {
+	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	alpha := &egv1a1.EvictionGuardPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-pool", UID: "alpha-uid", Finalizers: []string{egv1a1.PolicyFinalizer}},
+		Spec: egv1a1.EvictionGuardPolicySpec{
+			NodeFilter:    egv1a1.NodeFilter{CapacityTypes: []string{"spot"}},
+			SpareReplicas: ptr.To(int32(1)),
+			MaxBuffer:     ptr.To(int32(4)),
+			Backends:      defaultCatalogBackends(),
+		},
+	}
+	if err := c.Create(ctx, alpha); err != nil {
+		t.Fatal(err)
+	}
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	dep.Annotations = map[string]string{
+		egv1a1.ScaleBackendAnnotation: "deployment",
+		egv1a1.PolicyPinAnnotation:    "spot-workers",
+	}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+
+	prAlpha := &PolicyReconciler{Client: c, Scheme: pr.Scheme, Recorder: record.NewFakeRecorder(8), Now: pr.Now}
+	if _, err := prAlpha.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "alpha-pool"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("alpha-pool", "app", "web")}, &egv1a1.EvictionGuardWindow{}); err == nil {
+		t.Fatal("alpha-pool must not own a pinned workload")
+	}
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, win); err != nil {
+		t.Fatal(err)
+	}
+	if win.Spec.PolicyName != "spot-workers" {
+		t.Fatalf("policyName=%s", win.Spec.PolicyName)
+	}
+}
+
+func TestPolicyCatalogBackendsScaleDeployment(t *testing.T) {
+	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	p := &egv1a1.EvictionGuardPolicy{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "spot-workers"}, p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.Backends = map[string]egv1a1.BackendCatalogEntry{
+		"deployment": {
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Patches:    []egv1a1.BackendPatch{{Path: "spec.replicas"}},
+		},
+		"hpa": {
+			APIVersion: "autoscaling/v1",
+			Kind:       "HorizontalPodAutoscaler",
+			Patches:    []egv1a1.BackendPatch{{Path: "spec.minReplicas"}},
+		},
+	}
+	if err := c.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment"}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 4 {
+		t.Fatalf("replicas=%v, want 4", dep.Spec.Replicas)
+	}
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, win); err != nil {
+		t.Fatal(err)
+	}
+	if len(win.Spec.Actions) != 1 || win.Spec.Actions[0].FieldPath != "spec.replicas" {
+		t.Fatalf("actions=%+v", win.Spec.Actions)
+	}
+}
+
+func TestPolicyPinBypassesWorkloadSelector(t *testing.T) {
+	c, pr, _ := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	p := &egv1a1.EvictionGuardPolicy{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "spot-workers"}, p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.WorkloadSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"profile": "web"}}
+	if err := c.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	// Deployment labels do not match selector, but pin forces ownership.
+	dep.Annotations = map[string]string{
+		egv1a1.ScaleBackendAnnotation: "deployment",
+		egv1a1.PolicyPinAnnotation:    "spot-workers",
+	}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, &egv1a1.EvictionGuardWindow{}); err != nil {
+		t.Fatal(err)
 	}
 }

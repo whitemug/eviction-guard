@@ -1,0 +1,23 @@
+# KEDA Recipe B: external ScaledObject (empty patches). EVG opens a Window and
+# publishes metrics; KEDA must raise replicas (see scaledobject-evg-metrics.yaml).
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: keda-external-demo
+spec:
+  nodeFilter:
+    capacityTypes:
+      - spot
+  spareReplicas: 1
+  maxBuffer: 4
+  backends:
+    scaledobject:
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      # no patches — declared only
+  scaleBackAfter: 1m
+  disruptionSignals:
+    - KarpenterDisrupted
+    - KarpenterDeleteRequested
+    - OutOfService
+    - NodeCordoned

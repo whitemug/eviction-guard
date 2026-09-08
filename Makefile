@@ -52,9 +52,9 @@ test-envtest: generate manifests setup-envtest ## Run envtest against a real API
 		$(GO) test ./internal/controller/envtest -tags=envtest -count=1 -timeout 5m -v
 
 .PHONY: test-kind
-test-kind: ## Kind cluster: taint → scale-up → drain → cooldown → scale-back
+test-kind: ## Kind e2e. VERBOSE=1 and/or KEEP=1, or ARGS='--verbose --keep'
 	chmod +x test/e2e/kind.sh
-	test/e2e/kind.sh
+	test/e2e/kind.sh $(ARGS) $(if $(filter 1,$(VERBOSE)),--verbose) $(if $(filter 1,$(KEEP)),--keep)
 
 .PHONY: helm-lint
 helm-lint: ## helm lint + helm template (no cluster)

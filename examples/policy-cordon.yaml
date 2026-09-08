@@ -1,5 +1,6 @@
-# Opt-in: treat kubectl cordon / drain (spec.unschedulable) as disruption.
-# Off the built-in defaults because a cordon is not always an eviction.
+# Opt-in: cordon/drain coverage with a narrow nodeFilter.
+# NodeCordoned is in the built-in defaults; this example sets an explicit list
+# and scopes to one node pool so unrelated cordons elsewhere do not scale.
 apiVersion: eviction-guard.io/v1alpha1
 kind: EvictionGuardPolicy
 metadata:
@@ -19,4 +20,15 @@ spec:
   maxBuffer: 4
   maxConcurrentWindows: 8
   maxWindow: 2h
-  scaleBackAfter: 15m
+  backends:
+    deployment:
+      apiVersion: apps/v1
+      kind: Deployment
+      patches:
+        - path: spec.replicas
+    hpa:
+      apiVersion: autoscaling/v1
+      kind: HorizontalPodAutoscaler
+      patches:
+        - path: spec.minReplicas
+  scaleBackAfter: 1m

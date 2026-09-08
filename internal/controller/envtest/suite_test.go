@@ -52,6 +52,7 @@ func TestMain(m *testing.M) {
 func startEnv() error {
 	_, file, _, _ := goruntime.Caller(0)
 	crdDir := filepath.Join(filepath.Dir(file), "..", "..", "..", "config", "crd", "bases")
+	testdataCRDDir := filepath.Join(filepath.Dir(file), "testdata", "crds")
 
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -65,7 +66,7 @@ func startEnv() error {
 	}
 
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{crdDir},
+		CRDDirectoryPaths:     []string{crdDir, testdataCRDDir},
 		ErrorIfCRDPathMissing: true,
 		Scheme:                scheme,
 	}
@@ -151,6 +152,20 @@ func eventually(t *testing.T, timeout time.Duration, fn func(ctx context.Context
 		time.Sleep(150 * time.Millisecond)
 	}
 	t.Fatalf("timeout after %s: %v", timeout, last)
+}
+
+func consistently(t *testing.T, duration time.Duration, fn func(ctx context.Context) error) {
+	t.Helper()
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := fn(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("broke consistency within %s: %v", duration, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func createNS(t *testing.T, name string) {

@@ -1,4 +1,4 @@
-# Short cooldown so the kind loop can finish without waiting 15m.
+# Short cooldown so the kind loop can finish without waiting the default 1m.
 apiVersion: eviction-guard.io/v1alpha1
 kind: EvictionGuardPolicy
 metadata:
@@ -12,8 +12,12 @@ spec:
         eviction-guard.io/ignore: "true"
   spareReplicas: 1
   maxBuffer: 4
-  defaultBackend: deployment
+  backends:
+    deployment:
+      apiVersion: apps/v1
+      kind: Deployment
+      patches:
+        - path: spec.replicas
   scaleBackAfter: 10s
-  requirePDB: true
   disruptionSignals:
     - KarpenterDisrupted

@@ -175,7 +175,7 @@ func TestPodMembershipChanged(t *testing.T) {
 		t.Fatal("nodeName change must count")
 	}
 	labeled := base.DeepCopy()
-	labeled.Labels[egv1a1.EnabledLabel] = "true"
+	labeled.Labels[egv1a1.ProtectedLabel] = "true"
 	if !podMembershipChanged(base, labeled) {
 		t.Fatal("label change must count")
 	}

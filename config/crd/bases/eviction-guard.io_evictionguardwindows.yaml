@@ -22,8 +22,8 @@ spec:
     - jsonPath: .spec.policyName
       name: Policy
       type: string
-    - jsonPath: .spec.backend
-      name: Backend
+    - jsonPath: .spec.actions[0].key
+      name: Key
       type: string
     - jsonPath: .spec.baseline
       name: Baseline
@@ -73,28 +73,30 @@ spec:
             properties:
               actions:
                 description: |-
-                  Actions is the full fan-out: Deployment and/or HPA and/or CR, each with its
-                  own baseline so scale-back restores every object independently.
+                  Actions is the capacity fan-out: each integer path patched for this window,
+                  with its own baseline for independent restore. Empty when every bound catalog
+                  entry is external (no path patches) — e.g. KEDA owns scaling.
                 items:
-                  description: ScaleAction is one object Eviction Guard patched for
-                    a window (Deployment, HPA, or CR).
+                  description: |-
+                    ScaleAction is one object Eviction Guard patched for a window.
+                    Actions are stored in eviction-guard.io/scale-backend token order for patched paths.
+                    Scale-up and scale-back walk that same order; actions[0] is the SpareReady primary
+                    when Actions is non-empty. Empty Actions means every bound catalog entry was external.
                   properties:
                     apiVersion:
-                      type: string
-                    backend:
-                      description: ScaleBackendType is the capacity-mutation strategy
-                        Eviction Guard uses.
-                      enum:
-                      - deployment
-                      - hpa-min
-                      - crd
                       type: string
                     baseline:
                       description: Baseline is this object's value before scale-up.
                       format: int32
                       type: integer
                     fieldPath:
-                      description: FieldPath is used by the crd backend (default spec.replicas).
+                      description: FieldPath is the integer capacity field that was
+                        patched.
+                      type: string
+                    key:
+                      description: Key is the policy.spec.backends catalog key (e.g.
+                        deployment, hpa, webapp).
+                      minLength: 1
                       type: string
                     kind:
                       type: string
@@ -116,68 +118,17 @@ spec:
                       type: array
                       x-kubernetes-list-type: atomic
                   required:
-                  - backend
                   - baseline
+                  - key
                   - name
                   - scaledTo
                   type: object
                 type: array
-              backend:
-                description: |-
-                  Backend is the primary scaling backend (first action). Kept for kubectl columns
-                  and older windows that have no spec.actions.
-                enum:
-                - deployment
-                - hpa-min
-                - crd
-                type: string
-              backendTarget:
-                description: BackendTarget, if set, is the object the primary backend
-                  patches.
-                properties:
-                  apiVersion:
-                    description: API version of the referent.
-                    type: string
-                  fieldPath:
-                    description: |-
-                      If referring to a piece of an object instead of an entire object, this string
-                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-                      For example, if the object reference is to a container within a pod, this would take on a value like:
-                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
-                      the event) or if no container name is specified "spec.containers[2]" (container with
-                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
-                      referencing a part of an object.
-                    type: string
-                  kind:
-                    description: |-
-                      Kind of the referent.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                    type: string
-                  name:
-                    description: |-
-                      Name of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-                    type: string
-                  resourceVersion:
-                    description: |-
-                      Specific resourceVersion to which this reference is made, if any.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-                    type: string
-                  uid:
-                    description: |-
-                      UID of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-                    type: string
-                type: object
-                x-kubernetes-map-type: atomic
+                x-kubernetes-list-type: atomic
               baseline:
-                description: Baseline is the primary backend's replica count before
-                  scale-up.
+                description: |-
+                  Baseline is the primary capacity before scale-up (first patched action, or the
+                  Deployment replica count when Actions is empty). Used for SpareReady.
                 format: int32
                 type: integer
               policyName:
@@ -186,12 +137,13 @@ spec:
                 minLength: 1
                 type: string
               scaledTo:
-                description: ScaledTo is the replica (or minReplicas) count Eviction
-                  Guard set.
+                description: ScaledTo is the shared desired pod capacity for this
+                  window.
                 format: int32
                 type: integer
               target:
-                description: Target is the workload whose capacity was raised.
+                description: Target is the workload (Deployment) that owns the protected
+                  pods.
                 properties:
                   apiVersion:
                     description: APIVersion of the target (e.g. apps/v1).
@@ -219,12 +171,12 @@ spec:
                 type: array
               windowUntil:
                 description: |-
-                  WindowUntil is when scale-back becomes eligible. Set only after vulnerable
-                  nodes have cleared and status.spareReady is true (Cooling). Empty while Open.
+                  WindowUntil is when the window may close. Set when Cooling starts, which is
+                  also when capacity is restored (at-risk pods gone and spare Ready, or
+                  maxWindow). Empty while Open.
                 format: date-time
                 type: string
             required:
-            - backend
             - baseline
             - policyName
             - scaledTo

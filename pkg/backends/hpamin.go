@@ -13,40 +13,18 @@ import (
 
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 )
 
-// HPAMinBackend raises HorizontalPodAutoscaler.spec.minReplicas.
-type HPAMinBackend struct{}
-
-func (*HPAMinBackend) Name() egv1a1.ScaleBackendType { return egv1a1.ScaleBackendHPAMin }
-
-func (*HPAMinBackend) Current(ctx context.Context, c client.Client, t Target) (int32, error) {
-	hpa, err := getHPA(ctx, c, t)
-	if err != nil {
-		return 0, err
-	}
-	if hpa.Spec.MinReplicas == nil {
-		return 1, nil
-	}
-	return *hpa.Spec.MinReplicas, nil
-}
-
-func (*HPAMinBackend) ScaleUp(ctx context.Context, c client.Client, t Target, desired int32) error {
-	return patchMinReplicas(ctx, c, t, desired, false)
-}
-
-func (*HPAMinBackend) ScaleDown(ctx context.Context, c client.Client, t Target, baseline int32) error {
-	return patchMinReplicas(ctx, c, t, baseline, true)
-}
-
-// RestoreMinReplicas writes spec.minReplicas without clamping to
-// status.currentReplicas. The window controller uses this after it has already
-// decided load is not holding, so a following Deployment scale-down is not
-// pinned by the spare HPA floor.
+// RestoreMinReplicas writes HPA spec.minReplicas without clamping to
+// status.currentReplicas. Used when the window controller has already decided
+// load is not holding (coordinated deploy+HPA restore).
 func RestoreMinReplicas(ctx context.Context, c client.Client, t Target, baseline int32) error {
 	return patchMinReplicas(ctx, c, t, baseline, false)
+}
+
+// ScaleDownMinReplicas lowers HPA minReplicas, never below status.currentReplicas (G4).
+func ScaleDownMinReplicas(ctx context.Context, c client.Client, t Target, baseline int32) error {
+	return patchMinReplicas(ctx, c, t, baseline, true)
 }
 
 func getHPA(ctx context.Context, c client.Client, t Target) (*autoscalingv1.HorizontalPodAutoscaler, error) {
@@ -63,7 +41,6 @@ func patchMinReplicas(ctx context.Context, c client.Client, t Target, desired in
 		return err
 	}
 	if scaleDown && hpa.Status.CurrentReplicas > desired {
-		// Never lower minReplicas below what HPA is currently running — G4.
 		desired = hpa.Status.CurrentReplicas
 	}
 	if hpa.Spec.MinReplicas != nil && *hpa.Spec.MinReplicas == desired {

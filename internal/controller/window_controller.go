@@ -9,6 +9,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,7 +39,7 @@ const (
 	reasonSpareReady   = "SpareReady"
 	reasonSpareWait    = "SpareNotReady"
 	reasonMaxWindow    = "MaxWindowExceeded"
-	msgNodesVulnerable = "nodes still vulnerable"
+	msgNodesVulnerable = "at-risk pods still on vulnerable nodes"
 	msgWaitingSpare    = "waiting for Ready pods off vulnerable nodes"
 	msgMaxWindow       = "maxWindow exceeded; forcing cooldown"
 )
@@ -61,9 +62,11 @@ func (r *WindowReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=eviction-guard.io,resources=evictionguardwindows/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;update;patch
 
 func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -104,124 +107,110 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.deleteClosedWindow(ctx, win)
 	}
 
-	still, err := r.stillVulnerable(ctx, win, policy)
+	liveAtRisk, _, err := liveAtRiskPods(ctx, r.Client, win, policy)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	now := r.now()
 	forceCool := maxWindowExceeded(policy, win, now)
-	if len(still) > 0 && !forceCool {
-		if err := r.abortCooldown(ctx, win, policy); err != nil {
+	// Stamp ForcedCool early so the eviction webhook can fail-open while we cool.
+	if forceCool && !win.Status.ForcedCool {
+		win.Status.ForcedCool = true
+		if r.Recorder != nil {
+			r.Recorder.Eventf(win, corev1.EventTypeWarning, reasonMaxWindow,
+				"Open longer than maxWindow (%s); forcing cooldown", policy.MaxWindowOrDefault())
+		}
+		metrics.MaxWindowExceeded.WithLabelValues(policy.Name, win.Namespace, win.Spec.Target.Name).Inc()
+		if err := r.Status().Update(ctx, win); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseOpen, msgNodesVulnerable); err != nil {
-			return ctrl.Result{}, err
-		}
-		res := ctrl.Result{}
-		if !win.Status.SpareReady {
-			res.RequeueAfter = 15 * time.Second
-		}
-		if d := maxWindowRequeue(policy, win, now); d > 0 && (res.RequeueAfter == 0 || d < res.RequeueAfter) {
-			res.RequeueAfter = d
-		}
-		return res, nil
 	}
 
-	if !forceCool {
+	safeReady := win.Spec.Baseline
+	if !forceCool && liveAtRisk == 0 {
 		_, safe, err := r.spareCounts(ctx, win)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if safe < win.Spec.Baseline {
+		safeReady = safe
+	}
+	var until time.Time
+	if win.Spec.WindowUntil != nil {
+		until = win.Spec.WindowUntil.Time
+	}
+	dec := decideWindowStep(windowPhaseInput{
+		LiveAtRisk:  liveAtRisk,
+		ForceCool:   forceCool,
+		ForcedCool:  win.Status.ForcedCool,
+		SafeReady:   safeReady,
+		Baseline:    win.Spec.Baseline,
+		WindowUntil: until,
+		Now:         now,
+	})
+
+	switch dec.Step {
+	case stepStayOpenVulnerable, stepStayOpenWaitingSpare:
+		if dec.AbortCooldown {
 			if err := r.abortCooldown(ctx, win, policy); err != nil {
 				return ctrl.Result{}, err
 			}
-			if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseOpen, msgWaitingSpare); err != nil {
-				return ctrl.Result{}, err
-			}
-			res := ctrl.Result{RequeueAfter: 15 * time.Second}
-			if d := maxWindowRequeue(policy, win, now); d > 0 && d < res.RequeueAfter {
-				res.RequeueAfter = d
-			}
-			return res, nil
 		}
-	}
-	if win.Spec.WindowUntil == nil || win.Spec.WindowUntil.Time.IsZero() {
+		if err := r.writeStatus(ctx, win, dec.Phase, dec.Message); err != nil {
+			return ctrl.Result{}, err
+		}
+		return openRequeue(policy, win, now), nil
+
+	case stepBeginScaleBack:
+		held, err := r.scaleBackIfAllowed(ctx, win)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if held {
+			return ctrl.Result{RequeueAfter: time.Minute}, nil
+		}
 		dep, err := workloadDeployment(ctx, r.Client, win.Spec.Target.Namespace, win.Spec.Target.Name)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		until := metav1.NewTime(now.Add(scaleBackAfter(policy, dep)))
+		coolUntil := metav1.NewTime(now.Add(scaleBackAfter(policy, dep)))
 		patch := client.MergeFrom(win.DeepCopy())
-		win.Spec.WindowUntil = &until
+		win.Spec.WindowUntil = &coolUntil
 		if err := r.Patch(ctx, win, patch); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := stampCooldown(ctx, r.Client, policy, dep, win, until.Time); err != nil {
+		if err := stampCooldown(ctx, r.Client, policy, dep, win, coolUntil.Time); err != nil {
 			return ctrl.Result{}, err
 		}
-		coolMsg := reasonCooling
-		if forceCool {
-			if !win.Status.ForcedCool {
-				win.Status.ForcedCool = true
-				if r.Recorder != nil {
-					r.Recorder.Eventf(win, corev1.EventTypeWarning, reasonMaxWindow,
-						"Open longer than maxWindow (%s); forcing cooldown", policy.MaxWindowOrDefault())
-				}
-				metrics.MaxWindowExceeded.WithLabelValues(policy.Name, win.Namespace, win.Spec.Target.Name).Inc()
-			}
-			coolMsg = msgMaxWindow
-		}
+		coolMsg := coolingMessage(forceCool, win.Status.ForcedCool)
 		if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseCooling, coolMsg); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: coolUntil.Sub(now)}, nil
+
+	case stepStayCooling:
+		if err := r.writeStatus(ctx, win, dec.Phase, dec.Message); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: until.Sub(now)}, nil
-	}
-	if now.Before(win.Spec.WindowUntil.Time) {
-		coolMsg := reasonCooling
-		if forceCool || win.Status.ForcedCool {
-			coolMsg = msgMaxWindow
-		}
-		if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseCooling, coolMsg); err != nil {
+
+	case stepClose:
+		if err := r.writeStatus(ctx, win, dec.Phase, dec.Message); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: win.Spec.WindowUntil.Sub(now)}, nil
-	}
-
-	floor, hold, err := r.scaleFloor(ctx, win)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if hold {
-		if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseHeld, "HPA is holding or raising capacity; not fighting"); err != nil {
-			return ctrl.Result{}, err
+		if dec.RetainClosed {
+			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return r.deleteClosedWindow(ctx, win)
 	}
+	return ctrl.Result{}, nil
+}
 
-	if err := restoreActions(ctx, r.Client, win, floor); err != nil {
-		metrics.ScaleActions.WithLabelValues(win.Spec.PolicyName, "down", string(win.Spec.Backend), "error").Inc()
-		return ctrl.Result{}, err
+func openRequeue(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.EvictionGuardWindow, now time.Time) ctrl.Result {
+	res := ctrl.Result{RequeueAfter: 15 * time.Second}
+	if d := maxWindowRequeue(policy, win, now); d > 0 && d < res.RequeueAfter {
+		res.RequeueAfter = d
 	}
-	metrics.ScaleActions.WithLabelValues(win.Spec.PolicyName, "down", string(win.Spec.Backend), "ok").Inc()
-	metrics.CurrentSpare.WithLabelValues(win.Spec.PolicyName, win.Spec.Target.Namespace, win.Spec.Target.Name).Set(0)
-	metrics.SpareNotReady.WithLabelValues(win.Spec.PolicyName, win.Spec.Target.Namespace, win.Spec.Target.Name).Set(0)
-
-	if r.Recorder != nil {
-		r.Recorder.Eventf(win, corev1.EventTypeNormal, reasonScaledBack, "restored capacity to %d", floor)
-	}
-
-	closedMsg := "scaled back to baseline"
-	if win.Status.ForcedCool {
-		closedMsg = "scaled back after maxWindow; holding until nodes clear"
-	}
-	if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseClosed, closedMsg); err != nil {
-		return ctrl.Result{}, err
-	}
-	if win.Status.ForcedCool {
-		return ctrl.Result{}, nil
-	}
-	return r.deleteClosedWindow(ctx, win)
+	return res
 }
 
 func (r *WindowReconciler) deleteClosedWindow(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
@@ -316,6 +305,29 @@ func (r *WindowReconciler) scaleBackAndUnfinalize(ctx context.Context, win *egv1
 	return ctrl.Result{}, nil
 }
 
+func (r *WindowReconciler) scaleBackIfAllowed(ctx context.Context, win *egv1a1.EvictionGuardWindow) (held bool, err error) {
+	floor, hold, err := r.scaleFloor(ctx, win)
+	if err != nil {
+		return false, err
+	}
+	if hold {
+		if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseHeld, "HPA is holding or raising capacity; not fighting"); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := restoreActions(ctx, r.Client, win, floor); err != nil {
+		metrics.ScaleActions.WithLabelValues(win.Spec.PolicyName, "down", windowMetricBackend(win), "error").Inc()
+		return false, err
+	}
+	metrics.ScaleActions.WithLabelValues(win.Spec.PolicyName, "down", windowMetricBackend(win), "ok").Inc()
+	clearWorkloadPlanMetrics(win.Spec.PolicyName, win.Spec.Target.Namespace, win.Spec.Target.Name)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(win, corev1.EventTypeNormal, reasonScaledBack, "restored capacity to %d", floor)
+	}
+	return false, nil
+}
+
 func (r *WindowReconciler) scaleBackAndClose(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
 	if err := restoreActions(ctx, r.Client, win, win.Spec.Baseline); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
@@ -351,7 +363,7 @@ func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.Eviction
 
 func (r *WindowReconciler) hpaFor(ctx context.Context, win *egv1a1.EvictionGuardWindow) (*autoscalingv1.HorizontalPodAutoscaler, error) {
 	for _, a := range win.ScaleActions() {
-		if a.Backend != egv1a1.ScaleBackendHPAMin {
+		if a.Kind != "HorizontalPodAutoscaler" {
 			continue
 		}
 		hpa := &autoscalingv1.HorizontalPodAutoscaler{}
@@ -360,18 +372,6 @@ func (r *WindowReconciler) hpaFor(ctx context.Context, win *egv1a1.EvictionGuard
 			ns = win.Namespace
 		}
 		err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: a.Name}, hpa)
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return hpa, err
-	}
-	if win.Spec.Backend == egv1a1.ScaleBackendHPAMin && win.Spec.BackendTarget != nil && win.Spec.BackendTarget.Name != "" {
-		hpa := &autoscalingv1.HorizontalPodAutoscaler{}
-		ns := win.Spec.BackendTarget.Namespace
-		if ns == "" {
-			ns = win.Namespace
-		}
-		err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: win.Spec.BackendTarget.Name}, hpa)
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
@@ -388,6 +388,22 @@ func (r *WindowReconciler) hpaFor(ctx context.Context, win *egv1a1.EvictionGuard
 		}
 	}
 	return nil, nil
+}
+
+func windowMetricBackend(win *egv1a1.EvictionGuardWindow) string {
+	actions := win.ScaleActions()
+	if len(actions) == 0 {
+		return "unknown"
+	}
+	parts := make([]string, 0, len(actions))
+	for _, a := range actions {
+		if a.Key != "" {
+			parts = append(parts, a.Key)
+			continue
+		}
+		parts = append(parts, a.Kind)
+	}
+	return strings.Join(parts, ",")
 }
 
 func (r *WindowReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -416,6 +432,10 @@ func (r *WindowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *WindowReconciler) hpaToWindows(ctx context.Context, obj client.Object) []reconcile.Request {
+	hpa, ok := obj.(*autoscalingv1.HorizontalPodAutoscaler)
+	if !ok {
+		return nil
+	}
 	list := &egv1a1.EvictionGuardWindowList{}
 	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
@@ -423,12 +443,12 @@ func (r *WindowReconciler) hpaToWindows(ctx context.Context, obj client.Object) 
 	var reqs []reconcile.Request
 	for i := range list.Items {
 		w := &list.Items[i]
-		if w.Spec.Target.Name == obj.GetName() || (w.Spec.BackendTarget != nil && w.Spec.BackendTarget.Name == obj.GetName()) {
+		if hpa.Spec.ScaleTargetRef.Name == w.Spec.Target.Name {
 			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}})
 			continue
 		}
 		for _, a := range w.ScaleActions() {
-			if a.Backend == egv1a1.ScaleBackendHPAMin && a.Name == obj.GetName() {
+			if a.Kind == "HorizontalPodAutoscaler" && a.Name == hpa.Name {
 				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}})
 				break
 			}

@@ -10,6 +10,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -20,12 +21,29 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
+	"github.com/whitemug/eviction-guard/pkg/filters"
 	"github.com/whitemug/eviction-guard/pkg/metrics"
+	"github.com/whitemug/eviction-guard/pkg/signals"
 )
+
+func listWorkloadPods(ctx context.Context, c client.Reader, dep *appsv1.Deployment) ([]corev1.Pod, error) {
+	if dep == nil {
+		return nil, nil
+	}
+	sel, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
+	if err != nil {
+		return nil, err
+	}
+	list := &corev1.PodList{}
+	if err := c.List(ctx, list, client.InNamespace(dep.Namespace), client.MatchingLabelsSelector{Selector: sel}); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
 
 // spareCounts returns Ready pods and Ready pods not sitting on vulnerable nodes.
 func (r *WindowReconciler) spareCounts(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ready, safe int32, err error) {
-	if win.Spec.Target.Kind != "" && win.Spec.Target.Kind != "Deployment" {
+	if k := win.Spec.Target.Kind; k != "" && k != "Deployment" {
 		return 0, 0, nil
 	}
 	dep := &appsv1.Deployment{}
@@ -56,6 +74,82 @@ func (r *WindowReconciler) spareCounts(ctx context.Context, win *egv1a1.Eviction
 		}
 	}
 	return ready, safe, nil
+}
+
+// liveAtRiskPods counts non-terminating target pods on nodes that currently
+// match the policy filter and carry a disruption signal. It does not depend on
+// Spec.VulnerableNodes.
+//
+// Cost is O(workload pods + unique node Gets), not a cluster-wide Node list:
+// only nodes that already host this workload can contribute at-risk pods.
+func liveAtRiskPods(ctx context.Context, c client.Reader, win *egv1a1.EvictionGuardWindow, policy *egv1a1.EvictionGuardPolicy) (int, []string, error) {
+	if win == nil || policy == nil {
+		return 0, nil, nil
+	}
+	if k := win.Spec.Target.Kind; k != "" && k != "Deployment" {
+		return 0, nil, nil
+	}
+	filter, err := filters.FromSpec(policy.Spec.NodeFilter)
+	if err != nil {
+		return 0, nil, err
+	}
+	dep := &appsv1.Deployment{}
+	key := types.NamespacedName{Namespace: win.Spec.Target.Namespace, Name: win.Spec.Target.Name}
+	if err := c.Get(ctx, key, dep); err != nil {
+		return 0, nil, client.IgnoreNotFound(err)
+	}
+	pods, err := listWorkloadPods(ctx, c, dep)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	nodeCache := map[string]*corev1.Node{}
+	dying := map[string]struct{}{}
+	atRisk := 0
+	for i := range pods {
+		p := &pods[i]
+		if p.DeletionTimestamp != nil || p.Spec.NodeName == "" {
+			continue
+		}
+		vulnerable, err := nodeVulnerableCached(ctx, c, filter, policy, p.Spec.NodeName, nodeCache)
+		if err != nil {
+			return 0, nil, err
+		}
+		if !vulnerable {
+			continue
+		}
+		dying[p.Spec.NodeName] = struct{}{}
+		atRisk++
+	}
+	dyingNames := make([]string, 0, len(dying))
+	for name := range dying {
+		dyingNames = append(dyingNames, name)
+	}
+	sort.Strings(dyingNames)
+	return atRisk, dyingNames, nil
+}
+
+func nodeVulnerableCached(ctx context.Context, c client.Reader, filter filters.Filter, policy *egv1a1.EvictionGuardPolicy, name string, cache map[string]*corev1.Node) (bool, error) {
+	n, ok := cache[name]
+	if !ok {
+		n = &corev1.Node{}
+		if err := c.Get(ctx, types.NamespacedName{Name: name}, n); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				cache[name] = nil
+				return false, nil
+			}
+			return false, err
+		}
+		cache[name] = n
+	}
+	if n == nil {
+		return false, nil
+	}
+	ok, err := filter.Matches(n)
+	if err != nil || !ok {
+		return false, err
+	}
+	return signals.Vulnerable(n, policy), nil
 }
 
 func podReady(p *corev1.Pod) bool {

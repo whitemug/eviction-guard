@@ -76,15 +76,15 @@ func TestCustomTaintAndLabel(t *testing.T) {
 	}
 }
 
-func TestNodeCordonedIsOptIn(t *testing.T) {
+func TestNodeCordonedIsDefault(t *testing.T) {
 	n := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "n1"},
 		Spec:       corev1.NodeSpec{Unschedulable: true},
 	}
-	if signals.IsVulnerable(n, nil) {
-		t.Fatal("cordon must not fire on default signals")
+	if !signals.IsVulnerable(n, nil) {
+		t.Fatal("cordon should fire on default signals")
 	}
-	if !signals.IsVulnerable(n, []egv1a1.DisruptionSignal{egv1a1.SignalNodeCordoned}) {
-		t.Fatal("NodeCordoned should match spec.unschedulable")
+	if signals.IsVulnerable(n, []egv1a1.DisruptionSignal{egv1a1.SignalKarpenterDisrupted}) {
+		t.Fatal("cordon must not fire when NodeCordoned is omitted from the allow-list")
 	}
 }

@@ -10,32 +10,31 @@ package v1alpha1
 // Well-known labels, annotations, and finalizers. Other controllers and
 // plugins SHOULD use these constants rather than hard-coding the strings.
 const (
-	// EnabledLabel is the opt-in label for workloads. Value must be "true".
-	EnabledLabel = "eviction-guard.io/enabled"
+	// ProtectedLabel on the pod template opts the workload in. Value must be
+	// "true". Voluntary eviction is gated by the pods/eviction validating
+	// webhook until spare capacity is Ready — this label alone does not block.
+	ProtectedLabel = "eviction-guard.io/protected"
 
 	// PolicyLabel is set on EvictionGuardWindow objects to identify the owning policy.
 	PolicyLabel = "eviction-guard.io/policy"
+
+	// PolicyPinAnnotation on a Deployment forces that named EvictionGuardPolicy to own
+	// the workload. When set, ownership ignores namespaceSelector / workloadSelector
+	// (nodeFilter and disruption signals still apply). If the named policy does not
+	// exist, no other policy may scale or gate this workload.
+	PolicyPinAnnotation = "eviction-guard.io/policy-pin"
 
 	// WorkloadNameLabel / WorkloadNamespaceLabel identify the scaled workload.
 	WorkloadNameLabel      = "eviction-guard.io/workload-name"
 	WorkloadNamespaceLabel = "eviction-guard.io/workload-namespace"
 
-	// ScaleBackendAnnotation selects one or more scaling backends (comma-separated).
-	// Values: deployment, hpa-min, crd — e.g. "deployment,hpa-min,crd".
+	// ScaleBackendAnnotation selects scale targets as catalog keys (comma-separated),
+	// with optional name overrides (e.g. "deployment,hpa=my-hpa,webapp=fireship").
+	// Required on protected Deployments: without it, Eviction Guard does not scale.
+	// Keys must exist on the owning policy's spec.backends. Token order is patch
+	// order for entries with integer paths; the first patched path is the SpareReady
+	// primary. Empty-patch catalog entries are external (declared only).
 	ScaleBackendAnnotation = "eviction-guard.io/scale-backend"
-
-	// ScaleTargetAnnotation is the object the crd backend patches
-	// (group/version/namespaces/ns/kind/name). Also used as the HPA target
-	// when hpa-target is unset and hpa-min is the only non-deployment backend.
-	ScaleTargetAnnotation = "eviction-guard.io/scale-target"
-
-	// HPATargetAnnotation is the HPA to raise minReplicas on (namespace/name).
-	// Defaults to an HPA with the Deployment's namespace and name.
-	HPATargetAnnotation = "eviction-guard.io/hpa-target"
-
-	// CRDReplicasPathAnnotation is the JSON path of the replica field for the crd backend.
-	// Defaults to "spec.replicas".
-	CRDReplicasPathAnnotation = "eviction-guard.io/crd-replicas-path"
 
 	// ScaleBackAfterAnnotation overrides policy spec.scaleBackAfter for one workload
 	// (Go duration, e.g. "30m", "1h").
