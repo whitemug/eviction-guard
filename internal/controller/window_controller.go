@@ -19,13 +19,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/recorder"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/filters"
@@ -48,7 +48,7 @@ const (
 type WindowReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder recorder.EventRecorder
 	Now      func() time.Time
 }
 
@@ -116,10 +116,8 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Stamp ForcedCool early so the eviction webhook can fail-open while we cool.
 	if forceCool && !win.Status.ForcedCool {
 		win.Status.ForcedCool = true
-		if r.Recorder != nil {
-			r.Recorder.Eventf(win, corev1.EventTypeWarning, reasonMaxWindow,
-				"Open longer than maxWindow (%s); forcing cooldown", policy.MaxWindowOrDefault())
-		}
+		emitf(r.Recorder, win, corev1.EventTypeWarning, reasonMaxWindow,
+			"Open longer than maxWindow (%s); forcing cooldown", policy.MaxWindowOrDefault())
 		metrics.MaxWindowExceeded.WithLabelValues(policy.Name, win.Namespace, win.Spec.Target.Name).Inc()
 		if err := r.Status().Update(ctx, win); err != nil {
 			return ctrl.Result{}, err
@@ -327,9 +325,7 @@ func (r *WindowReconciler) scaleBackIfAllowed(ctx context.Context, win *egv1a1.E
 	}
 	metrics.ScaleActions.WithLabelValues(win.Spec.PolicyName, "down", windowMetricBackend(win), "ok").Inc()
 	clearWorkloadPlanMetrics(win.Spec.PolicyName, win.Spec.Target.Namespace, win.Spec.Target.Name)
-	if r.Recorder != nil {
-		r.Recorder.Eventf(win, corev1.EventTypeNormal, reasonScaledBack, "restored capacity to %d", floor)
-	}
+	emitf(r.Recorder, win, corev1.EventTypeNormal, reasonScaledBack, "restored capacity to %d", floor)
 	return false, nil
 }
 
@@ -348,13 +344,13 @@ func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.Eviction
 	oldReady, oldSafe := win.Status.ReadyReplicas, win.Status.SafeReadyReplicas
 	before := win.Status.SpareReady
 	transitioned := applySpareStatus(win, ready, safe, metav1.NewTime(r.now()))
-	if r.Recorder != nil && transitioned {
+	if transitioned {
 		if win.Status.SpareReady && !before {
-			r.Recorder.Eventf(win, corev1.EventTypeNormal, reasonSpareReady,
+			emitf(r.Recorder, win, corev1.EventTypeNormal, reasonSpareReady,
 				"spare capacity Ready off vulnerable nodes (safeReady=%d baseline=%d)", safe, win.Spec.Baseline)
 		}
 		if !win.Status.SpareReady {
-			r.Recorder.Eventf(win, corev1.EventTypeNormal, reasonSpareWait,
+			emitf(r.Recorder, win, corev1.EventTypeNormal, reasonSpareWait,
 				"waiting for Ready pods off vulnerable nodes (safeReady=%d baseline=%d)", safe, win.Spec.Baseline)
 		}
 	}

@@ -162,10 +162,6 @@ type EvictionGuardWindowList struct {
 	Items           []EvictionGuardWindow `json:"items"`
 }
 
-func init() {
-	SchemeBuilder.Register(&EvictionGuardWindow{}, &EvictionGuardWindowList{})
-}
-
 func (w *EvictionGuardWindow) IsActive() bool {
 	switch w.Status.Phase {
 	case WindowPhaseOpen, WindowPhaseCooling, WindowPhaseHeld, "":

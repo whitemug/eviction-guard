@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/recorder"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/filters"
@@ -55,7 +55,7 @@ const (
 type PolicyReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder recorder.EventRecorder
 	Now      func() time.Time
 }
 
@@ -160,11 +160,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err := r.ensureWindow(ctx, policy, w); err != nil {
 			logger.Error(err, "scale-up failed", "deployment", w.deploy.Name, "namespace", w.deploy.Namespace)
 			metrics.ScaleActions.WithLabelValues(policy.Name, "up", backendLabel(w.deploy, policy), "error").Inc()
-			if r.Recorder != nil {
-				r.Recorder.Eventf(w.deploy, corev1.EventTypeWarning, reasonScaleUpFailed, "%v", err)
-				r.Recorder.Eventf(policy, corev1.EventTypeWarning, reasonScaleUpFailed,
-					"scale-up %s/%s failed: %v", w.deploy.Namespace, w.deploy.Name, err)
-			}
+			emitf(r.Recorder, w.deploy, corev1.EventTypeWarning, reasonScaleUpFailed, "%v", err)
+			emitf(r.Recorder, policy, corev1.EventTypeWarning, reasonScaleUpFailed,
+				"scale-up %s/%s failed: %v", w.deploy.Namespace, w.deploy.Name, err)
 			scaleErrs = append(scaleErrs, fmt.Errorf("%s/%s: %w", w.deploy.Namespace, w.deploy.Name, err))
 			continue
 		}
@@ -172,8 +170,8 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			active++
 		}
 	}
-	if deferred > 0 && r.Recorder != nil {
-		r.Recorder.Eventf(policy, corev1.EventTypeNormal, reasonWindowsCapped,
+	if deferred > 0 {
+		emitf(r.Recorder, policy, corev1.EventTypeNormal, reasonWindowsCapped,
 			"%d workload(s) waiting for a window slot (active %d, maxConcurrentWindows %d)",
 			deferred, active, cap)
 	}
@@ -337,8 +335,8 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 	}
 
 	now := r.now()
-	if scaled && r.Recorder != nil {
-		r.Recorder.Eventf(w.deploy, corev1.EventTypeNormal, reasonScaledUp,
+	if scaled {
+		emitf(r.Recorder, w.deploy, corev1.EventTypeNormal, reasonScaledUp,
 			"policy %q scaled replicas to %d (baseline %d) ahead of disruption on nodes %v",
 			policy.Name, plan.desired, plan.primaryBaseline, nodeNames)
 	}
@@ -383,10 +381,8 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 		if err := r.Status().Update(ctx, win); err != nil {
 			return err
 		}
-		if r.Recorder != nil {
-			r.Recorder.Eventf(policy, corev1.EventTypeNormal, reasonWindowOpened,
-				"opened window %s/%s for %s", win.Namespace, win.Name, w.deploy.Name)
-		}
+		emitf(r.Recorder, policy, corev1.EventTypeNormal, reasonWindowOpened,
+			"opened window %s/%s for %s", win.Namespace, win.Name, w.deploy.Name)
 		return nil
 	}
 

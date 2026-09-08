@@ -290,10 +290,6 @@ type EvictionGuardPolicyList struct {
 	Items           []EvictionGuardPolicy `json:"items"`
 }
 
-func init() {
-	SchemeBuilder.Register(&EvictionGuardPolicy{}, &EvictionGuardPolicyList{})
-}
-
 // DefaultSpareReplicas is used when Spec.SpareReplicas is unset.
 const DefaultSpareReplicas int32 = 1
 

@@ -38,13 +38,15 @@ test: generate manifests fmt vet ## Run unit tests (fake client; no envtest)
 	$(GO) test ./... -coverprofile cover.out
 
 ENVTEST ?= $(LOCALBIN)/setup-envtest
-ENVTEST_K8S_VERSION ?= 1.32
+# Align with controller-runtime / k8s.io/api in go.mod.
+ENVTEST_VERSION ?= release-0.25
+ENVTEST_K8S_VERSION ?= 1.37
 
 .PHONY: setup-envtest
 setup-envtest: $(ENVTEST) ## Install setup-envtest and download kube-apiserver/etcd
 	$(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path >/dev/null
 $(ENVTEST): | localbin
-	GOBIN=$(LOCALBIN) $(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.20
+	GOBIN=$(LOCALBIN) $(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
 
 .PHONY: test-envtest
 test-envtest: generate manifests setup-envtest ## Run envtest against a real API server
