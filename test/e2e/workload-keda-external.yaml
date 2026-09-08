@@ -1,0 +1,66 @@
+# Deployment + ScaledObject for KEDA Recipe B (Prometheus → evg_* metrics).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+  annotations:
+    eviction-guard.io/scale-backend: scaledobject=web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        eviction-guard.io/protected: "true"
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 8
+            periodSeconds: 2
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: web
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: web
+  pollingInterval: 5
+  cooldownPeriod: 5
+  minReplicaCount: 3
+  maxReplicaCount: 10
+  # Kind e2e: default HPA scale-down stabilization is 300s — too slow for the loop.
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+  triggers:
+    # EVG publishes this while a Window is open; KEDA takes ceil(metric/threshold).
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.default.svc:9090
+        metricName: evg_desired_replicas
+        query: max(evg_desired_replicas{namespace="default",workload="web"}) or vector(0)
+        threshold: "1"
+        activationThreshold: "0.5"

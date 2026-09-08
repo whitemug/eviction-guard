@@ -1,0 +1,23 @@
+# KEDA Recipe B: empty-patch ScaledObject catalog entry.
+# EVG opens a Window + publishes evg_* metrics; KEDA scales from Prometheus.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: keda-external
+spec:
+  nodeFilter:
+    capacityTypes:
+      - spot
+    excludeLabelSelector:
+      matchLabels:
+        eviction-guard.io/ignore: "true"
+  spareReplicas: 1
+  maxBuffer: 4
+  backends:
+    scaledobject:
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      # no patches — external / metrics only
+  scaleBackAfter: 10s
+  disruptionSignals:
+    - KarpenterDisrupted

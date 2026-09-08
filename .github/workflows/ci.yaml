@@ -64,3 +64,25 @@ jobs:
           install_only: true
       - name: Kind e2e
         run: make test-kind
+
+  e2e-backends:
+    needs: test
+    runs-on: ubuntu-latest
+    # Deployment + HPA min/max + KEDA Recipe A + Recipe B (Prometheus).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.17.3
+      - uses: azure/setup-kubectl@v5
+      - name: Install kind
+        uses: helm/kind-action@v1.12.0
+        with:
+          install_only: true
+      - name: Kind backends e2e
+        run: make test-kind-backends
+        env:
+          CASES: deployment,hpa,keda,keda-external
+          REUSE: "0"
+          KEEP: "0"

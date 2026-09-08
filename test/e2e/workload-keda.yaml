@@ -1,0 +1,53 @@
+# Deployment + ScaledObject for KEDA Recipe A e2e.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+  annotations:
+    eviction-guard.io/scale-backend: scaledobject=web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        eviction-guard.io/protected: "true"
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 8
+            periodSeconds: 2
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: web
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: web
+  pollingInterval: 5
+  cooldownPeriod: 5
+  minReplicaCount: 3
+  maxReplicaCount: 10
+  triggers:
+    # Idle CPU trigger so KEDA creates an HPA; EVG raises the floor on disruption.
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "90"

@@ -1,0 +1,23 @@
+# KEDA Recipe A: EVG patches ScaledObject.minReplicaCount.
+apiVersion: eviction-guard.io/v1alpha1
+kind: EvictionGuardPolicy
+metadata:
+  name: keda-min
+spec:
+  nodeFilter:
+    capacityTypes:
+      - spot
+    excludeLabelSelector:
+      matchLabels:
+        eviction-guard.io/ignore: "true"
+  spareReplicas: 1
+  maxBuffer: 4
+  backends:
+    scaledobject:
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      patches:
+        - path: spec.minReplicaCount
+  scaleBackAfter: 10s
+  disruptionSignals:
+    - KarpenterDisrupted

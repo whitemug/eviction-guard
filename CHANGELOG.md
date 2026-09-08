@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/); the CRD API is `v1alpha1` and may still change before a beta.
 
+## [Unreleased]
+
+### Fixed
+
+- Consecutive integer patches on the same object (e.g. HPA `minReplicas` + `maxReplicas`) apply as one merge patch so API validation stays valid.
+- Scale-floor hold no longer treats HPA `currentReplicas` above `ScaledTo` as load when it is still at/below the HPA min floor we set.
+
+### Added
+
+- Kind backends e2e (`make test-kind-backends`): Deployment, HPA min+max, KEDA Recipe A (patch min), and Recipe B (Prometheus / empty patches). Wired in CI as `e2e-backends`.
+
 ## [0.2.0] — 2026-09-08
 
 First public-oriented redesign cut. **Breaking** relative to any prior `0.1.x` chart/image that used `defaultBackend` / REST `scale-target` / PDB-style hold.

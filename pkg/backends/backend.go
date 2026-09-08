@@ -42,3 +42,11 @@ func ScaleUp(ctx context.Context, c client.Client, t Target, desired int32) erro
 func ScaleDown(ctx context.Context, c client.Client, t Target, baseline int32) error {
 	return Field.ScaleDown(ctx, c, t, baseline)
 }
+
+// PatchIntegers writes multiple integer fields on one object in a single merge
+// patch. paths is an ordered list of field paths; values[path] is the desired
+// integer. Use this when several catalog paths target the same object (e.g. HPA
+// min+max) so admission validation sees a consistent object.
+func PatchIntegers(ctx context.Context, c client.Client, base Target, paths []string, values map[string]int32) error {
+	return Field.PatchIntegers(ctx, c, base, paths, values)
+}

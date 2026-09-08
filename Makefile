@@ -56,6 +56,11 @@ test-kind: ## Kind e2e. VERBOSE=1 and/or KEEP=1, or ARGS='--verbose --keep'
 	chmod +x test/e2e/kind.sh
 	test/e2e/kind.sh $(ARGS) $(if $(filter 1,$(VERBOSE)),--verbose) $(if $(filter 1,$(KEEP)),--keep)
 
+.PHONY: test-kind-backends
+test-kind-backends: ## Kind e2e backends (fresh cluster default). REUSE=1 KEEP=1 to polish locally.
+	chmod +x test/e2e/backends.sh
+	test/e2e/backends.sh $(ARGS) $(if $(filter 1,$(VERBOSE)),--verbose) $(if $(filter 1,$(KEEP)),--keep)
+
 .PHONY: helm-lint
 helm-lint: ## helm lint + helm template (no cluster)
 	helm lint charts/eviction-guard
