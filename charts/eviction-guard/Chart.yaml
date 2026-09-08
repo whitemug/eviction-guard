@@ -18,3 +18,8 @@ sources:
 maintainers:
   - name: Vikas Verma
     url: https://github.com/vikasvr
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/operator: "true"
+  artifacthub.io/category: security
+  artifacthub.io/prerelease: "false"

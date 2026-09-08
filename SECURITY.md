@@ -6,15 +6,18 @@ Alpha (`v0.x`, API `v1alpha1`) receives fixes on `main` only.
 
 ## Reporting a vulnerability
 
-Please **do not** open a public issue for security reports.
+Please **do not** open a public issue or Discussion for security reports.
 
-Contact [Vikas Verma](https://github.com/vikasvr), or open a [private security advisory](https://github.com/whitemug/eviction-guard/security/advisories/new) if you have access.
+Prefer a [private security advisory](https://github.com/whitemug/eviction-guard/security/advisories/new).
+If you cannot open an advisory, contact the lead maintainer listed in [MAINTAINERS](MAINTAINERS) via GitHub.
 
 Include:
 
 - Affected version / commit
 - Cluster impact (RBAC, scale-up runaway, denial of disruption protection)
 - Reproduction notes
+
+We aim to acknowledge reports within **7 days** and share a remediation plan or status update within **14 days**.
 
 ## Trust boundary
 

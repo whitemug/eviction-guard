@@ -10,4 +10,4 @@ resources:
 images:
   - name: controller
     newName: ghcr.io/whitemug/eviction-guard
-    newTag: latest
+    newTag: "0.2.0"

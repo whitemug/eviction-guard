@@ -47,7 +47,7 @@ spec:
         eviction-guard.io/protected: "true"
 ```
 
-Minimal policy (Spot + defaults including cordon):
+Minimal policy (Spot capacity filter; built-in signals include Karpenter / cordon — add `SpotInterrupted` when you want Spot interruption coverage, see [examples/policy-spot.yaml](examples/policy-spot.yaml)):
 
 ```yaml
 apiVersion: eviction-guard.io/v1alpha1
@@ -73,7 +73,7 @@ spec:
         - path: spec.minReplicas
 ```
 
-More examples in `examples/`. Signal recipes: [docs/signals.md](docs/signals.md).
+More examples in [`examples/`](examples/README.md). Signal recipes: [docs/signals.md](docs/signals.md).
 
 ## How it works
 
@@ -115,7 +115,7 @@ Full reference: [docs/metrics.md](docs/metrics.md).
 | Workload | `protected` label + required `scale-backend` annotation |
 | Go module | `plugin.RegisterSignal` (capacity via Policy catalog; node coverage via `nodeFilter`) |
 
-See [docs/extension.md](docs/extension.md). Building from source needs **Go 1.27** (`go.mod`).
+See [docs/extension.md](docs/extension.md). Building from source needs **Go 1.27.1** (`go.mod`).
 
 ## Status
 

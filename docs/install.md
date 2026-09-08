@@ -6,7 +6,7 @@ Eviction Guard runs as a manager Deployment: Policy + Window reconcilers, plus a
 
 - Kubernetes 1.27+
 - `kubectl`, optionally Helm 3
-- Go 1.27+ only if you build from source
+- Go 1.27.1 only if you build from source (`go.mod`)
 - Workloads will need `eviction-guard.io/protected: "true"` on the pod template ([Configure](configure.md))
 
 ## Helm (recommended)

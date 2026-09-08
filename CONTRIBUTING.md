@@ -8,7 +8,7 @@ Questions that are not bugs belong in [Discussions](https://github.com/whitemug/
 
 ## Development
 
-Requires **Go 1.27.1** on `PATH` (`go version` should print `go1.27`). The module pins this in `go.mod` (`go 1.27.1`); CI reads that file and the Dockerfile uses `golang:1.27.1`. An older local `go` (1.18–1.20) fails with `invalid go version '1.23.0': must match format 1.23` — that is the *old binary* rejecting a modern `go.mod`, not this project using 1.23. Override with `make test GO=/path/to/go1.27/bin/go`.
+Requires **Go 1.27.1** on `PATH` (`go version` should print `go1.27.1` or compatible). The module pins this in `go.mod`; CI reads that file and the Dockerfile uses `golang:1.27.1`. Override with `make test GO=/path/to/go1.27/bin/go` if needed.
 
 ```bash
 make test          # generate, manifests, fmt, vet, unit tests (fake client)
