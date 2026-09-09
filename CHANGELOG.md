@@ -10,6 +10,11 @@ All notable changes to this project are documented here. Versions follow [SemVer
 
 ### Fixed
 
+- Eviction webhook no longer fail-opens on non-NotFound pod `Get` errors (timeouts/Forbidden); only true NotFound allows.
+- Eviction gate allows pods on non-vulnerable nodes even while a sibling disruption window is open (matches documented behavior).
+- Window reconciler scales back remaining backends and closes when the target Deployment is deleted, instead of waiting until `maxWindow`.
+- Policy reconcile propagates owner-resolution API errors instead of silently skipping at-risk pods.
+- Multi-path HPA restore (`minReplicas`+`maxReplicas`) applies the G4 `currentReplicas` floor; restore skips missing objects and continues with remaining actions.
 - Consecutive integer patches on the same object (e.g. HPA `minReplicas` + `maxReplicas`) apply as one merge patch so API validation stays valid.
 - Scale-floor hold no longer treats HPA `currentReplicas` above `ScaledTo` as load when it is still at/below the HPA min floor we set.
 

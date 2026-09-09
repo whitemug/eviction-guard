@@ -1494,3 +1494,56 @@ func TestPolicyPinBypassesWorkloadSelector(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWindowScalesBackWhenTargetDeploymentGone(t *testing.T) {
+	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa"}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	putHPA(t, c, 2)
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 4 {
+		t.Fatalf("minReplicas=%d after scale-up, want 4", ptrVal(hpa.Spec.MinReplicas))
+	}
+
+	winNN := types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, winNN, win); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: winNN}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 2 {
+		t.Fatalf("minReplicas=%d after target gone, want baseline 2", ptrVal(hpa.Spec.MinReplicas))
+	}
+	if err := c.Get(ctx, winNN, win); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range win.Finalizers {
+		if f == egv1a1.WindowFinalizer {
+			t.Fatal("window finalizer should be cleared when target is gone")
+		}
+	}
+}
