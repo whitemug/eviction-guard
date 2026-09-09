@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/whitemug/eviction-guard
-  tag: "0.2.0"
+  tag: "0.2.1"
   pullPolicy: IfNotPresent
 
 # One replica is enough: this controller is not on the request path.

@@ -6,7 +6,7 @@ Proactive spare capacity and `pods/eviction` gating for predicted node disruptio
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --namespace eviction-guard-system --create-namespace
 ```
 
@@ -33,7 +33,7 @@ See comments in [values.yaml](values.yaml). Common overrides:
 
 ```bash
 helm upgrade --install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.0 -n eviction-guard-system \
+  --version 0.2.1 -n eviction-guard-system \
   --set replicaCount=2 \
   --set resources.requests.memory=128Mi
 ```

@@ -15,7 +15,7 @@ Tagged release:
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --namespace eviction-guard-system --create-namespace
 kubectl apply -f examples/policy-spot.yaml
 kubectl apply -f examples/workload.yaml
@@ -55,7 +55,7 @@ Default: **one replica**, leader election on.
 
 ```bash
 helm upgrade --install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --namespace eviction-guard-system --create-namespace \
   --set replicaCount=2
 ```
