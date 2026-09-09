@@ -241,6 +241,65 @@ func TestEvaluateForceCoolAllows(t *testing.T) {
 	}
 }
 
+func TestEvaluateAllowsNonVulnerableWithActiveWindow(t *testing.T) {
+	// Sibling spot disruption must not gate pods on healthy nodes.
+	s := scheme(t)
+	spot := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-1", Labels: map[string]string{"karpenter.sh/capacity-type": "spot"}},
+		Spec:       corev1.NodeSpec{Taints: []corev1.Taint{{Key: signals.TaintKarpenterDisrupted}}},
+	}
+	ondemand := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "od-1", Labels: map[string]string{"karpenter.sh/capacity-type": "on-demand"}},
+	}
+	policy := &egv1a1.EvictionGuardPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot"},
+		Spec:       egv1a1.EvictionGuardPolicySpec{NodeFilter: egv1a1.NodeFilter{CapacityTypes: []string{"spot"}}},
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web", egv1a1.ProtectedLabel: "true"}},
+			},
+		},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-rs", Namespace: "app",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "d1", Controller: ptr.To(true),
+			}},
+		},
+	}
+	safePod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-safe", Namespace: "app",
+			Labels: map[string]string{"app": "web", egv1a1.ProtectedLabel: "true"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-rs", UID: "r1", Controller: ptr.To(true),
+			}},
+		},
+		Spec: corev1.PodSpec{NodeName: "od-1"},
+	}
+	win := &egv1a1.EvictionGuardWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: naming.WindowName("spot", "app", "web"), Namespace: "app"},
+		Spec: egv1a1.EvictionGuardWindowSpec{
+			PolicyName: "spot", VulnerableNodes: []string{"spot-1"}, Baseline: 3,
+			Target: egv1a1.WorkloadReference{Name: "web", Namespace: "app", Kind: "Deployment"},
+		},
+		Status: egv1a1.EvictionGuardWindowStatus{Phase: egv1a1.WindowPhaseOpen, SpareReady: false},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(spot, ondemand, policy, dep, rs, safePod, win).Build()
+	res, err := evictgate.Evaluate(context.Background(), c, safePod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Decision != evictgate.Allow {
+		t.Fatalf("non-vulnerable pod must allow while window open, got %+v", res)
+	}
+}
+
 func TestEvaluateDeniesWhenDeferredNoWindow(t *testing.T) {
 	// Vulnerable node + opted-in pod but no window yet (e.g. maxConcurrentWindows) → deny.
 	s := scheme(t)

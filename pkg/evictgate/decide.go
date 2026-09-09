@@ -49,7 +49,7 @@ type Result struct {
 // Rules:
 //   - Non-opted-in pods: allow
 //   - No owning policy (pin missing / no selector match): allow
-//   - Owning policy's nodeFilter does not match and no active window: allow
+//   - Node not vulnerable (filter miss / no signal): allow (even if a sibling window is open)
 //   - ForcedCool window: allow (fail-open after maxWindow)
 //   - SpareReady: allow only the lexicographically first at-risk pod (one at a time)
 //   - Otherwise: deny (controller must open/scale the window)
@@ -103,15 +103,15 @@ func Evaluate(ctx context.Context, c client.Client, pod *corev1.Pod) (Result, er
 	}
 
 	vulnerable := nodeOK && signals.Vulnerable(node, owner)
+	if !vulnerable {
+		return Result{Allow, "no disruption"}, nil
+	}
 
 	win, err := activeWindowFor(ctx, c, dep, owner)
 	if err != nil {
 		return Result{}, err
 	}
 
-	if !vulnerable && win == nil {
-		return Result{Allow, "no disruption"}, nil
-	}
 	if win != nil && win.Status.ForcedCool {
 		return Result{Allow, "maxWindow force-cool"}, nil
 	}

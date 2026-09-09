@@ -96,6 +96,23 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, polErr
 	}
 
+	// Target Deployment deleted: restore remaining backends (e.g. HPA) and close.
+	// Without this, liveAtRisk/spareCounts treat NotFound as zeros and the window
+	// stays Open waiting for spare until maxWindow.
+	if k := win.Spec.Target.Kind; k == "" || k == "Deployment" {
+		dep := &appsv1.Deployment{}
+		tErr := r.Get(ctx, types.NamespacedName{
+			Namespace: win.Spec.Target.Namespace, Name: win.Spec.Target.Name,
+		}, dep)
+		if apierrors.IsNotFound(tErr) {
+			logger.Info("target gone; scaling back")
+			return r.scaleBackAndClose(ctx, win)
+		}
+		if tErr != nil {
+			return ctrl.Result{}, tErr
+		}
+	}
+
 	if win.Status.Phase == egv1a1.WindowPhaseClosed && win.Status.ForcedCool {
 		still, err := r.stillVulnerable(ctx, win, policy)
 		if err != nil {

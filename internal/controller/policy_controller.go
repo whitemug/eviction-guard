@@ -235,7 +235,10 @@ func (r *PolicyReconciler) collectWorkloads(ctx context.Context, policy *egv1a1.
 				continue
 			}
 			dep, err := r.ownerDeployment(ctx, pod)
-			if err != nil || dep == nil {
+			if err != nil {
+				return nil, err
+			}
+			if dep == nil {
 				continue
 			}
 			if !workloadProtected(dep, pod) {

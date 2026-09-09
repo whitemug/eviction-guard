@@ -13,6 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,8 +54,13 @@ func (v *evictionValidator) Handle(ctx context.Context, req admission.Request) a
 	}
 	pod := &corev1.Pod{}
 	if err := v.client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, pod); err != nil {
-		// Pod already gone — allow.
-		return admission.Allowed("pod not found")
+		if apierrors.IsNotFound(err) {
+			// Pod already gone — allow.
+			return admission.Allowed("pod not found")
+		}
+		// Transient / auth failures must not fail-open while the webhook is up
+		// (matches failurePolicy: Fail — deny under uncertainty).
+		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
 	res, err := evictgate.Evaluate(ctx, v.client, pod)

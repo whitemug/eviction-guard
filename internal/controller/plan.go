@@ -15,6 +15,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -256,43 +257,83 @@ func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGu
 
 		if len(group) == 1 {
 			if err := restoreOneAction(ctx, c, win, group[0], deployFloor, coord); err != nil {
+				if apierrors.IsNotFound(err) {
+					i = j
+					continue
+				}
 				return err
 			}
 		} else {
-			var paths []string
-			values := map[string]int32{}
-			var stampKeys []string
-			for _, ga := range group {
-				gt := actionTarget(ga)
-				if gt.Namespace == "" {
-					gt.Namespace = win.Namespace
+			if err := restoreGroupedActions(ctx, c, win, group, deployFloor, coord); err != nil {
+				if apierrors.IsNotFound(err) {
+					i = j
+					continue
 				}
-				floor := ga.Baseline
-				if isDeployAction(ga) {
-					floor = deployFloor
-				}
-				current, err := backends.Current(ctx, c, gt)
-				if err != nil {
-					return wrapBackendErr(gt, err)
-				}
-				paths = append(paths, gt.FieldPath)
-				if current > floor {
-					values[gt.FieldPath] = floor
-				}
-				stampKeys = append(stampKeys, ga.StampKeys...)
-			}
-			if len(values) > 0 {
-				if err := backends.PatchIntegers(ctx, c, target, paths, values); err != nil {
-					return wrapBackendErr(target, err)
-				}
-			}
-			if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(uniqueStrings(stampKeys))); err != nil {
-				return wrapBackendErr(target, err)
+				return err
 			}
 		}
 		i = j
 	}
 	return nil
+}
+
+// restoreGroupedActions restores consecutive paths on one object as a single merge patch.
+func restoreGroupedActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, group []egv1a1.ScaleAction, deployFloor int32, coord bool) error {
+	target := actionTarget(group[0])
+	if target.Namespace == "" {
+		target.Namespace = win.Namespace
+	}
+	var paths []string
+	values := map[string]int32{}
+	var stampKeys []string
+	for _, ga := range group {
+		gt := actionTarget(ga)
+		if gt.Namespace == "" {
+			gt.Namespace = win.Namespace
+		}
+		floor := ga.Baseline
+		if isDeployAction(ga) {
+			floor = deployFloor
+		}
+		current, err := backends.Current(ctx, c, gt)
+		if err != nil {
+			return wrapBackendErr(gt, err)
+		}
+		if isHPAMinAction(ga) && !coord {
+			// G4: never lower minReplicas below status.currentReplicas (same as restoreOneAction).
+			hpaFloor, err := hpaMinRestoreFloor(ctx, c, gt, floor)
+			if err != nil {
+				return wrapBackendErr(gt, err)
+			}
+			floor = hpaFloor
+		}
+		paths = append(paths, gt.FieldPath)
+		if current > floor {
+			values[gt.FieldPath] = floor
+		}
+		stampKeys = append(stampKeys, ga.StampKeys...)
+	}
+	if len(values) > 0 {
+		if err := backends.PatchIntegers(ctx, c, target, paths, values); err != nil {
+			return wrapBackendErr(target, err)
+		}
+	}
+	if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(uniqueStrings(stampKeys))); err != nil {
+		return wrapBackendErr(target, err)
+	}
+	return nil
+}
+
+// hpaMinRestoreFloor applies G4 when restoring HPA minReplicas without a coordinated Deployment restore.
+func hpaMinRestoreFloor(ctx context.Context, c client.Client, t backends.Target, baseline int32) (int32, error) {
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := c.Get(ctx, t.ObjectKey, hpa); err != nil {
+		return 0, err
+	}
+	if hpa.Status.CurrentReplicas > baseline {
+		return hpa.Status.CurrentReplicas, nil
+	}
+	return baseline, nil
 }
 
 func restoreOneAction(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, a egv1a1.ScaleAction, deployFloor int32, coord bool) error {
