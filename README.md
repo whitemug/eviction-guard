@@ -26,7 +26,7 @@ A validating webhook on `pods/eviction` denies eviction of opted-in pods until s
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --namespace eviction-guard-system --create-namespace
 kubectl apply -f examples/policy-spot.yaml
 kubectl apply -f examples/workload.yaml
@@ -119,7 +119,7 @@ See [docs/extension.md](docs/extension.md). Building from source needs **Go 1.27
 
 ## Status
 
-v1alpha1 (`0.2.0`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md).
+v1alpha1 (`0.2.1`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md).
 
 ## Community
 

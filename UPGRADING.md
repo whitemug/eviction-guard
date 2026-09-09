@@ -1,12 +1,20 @@
 # Upgrading
 
-`api/v1alpha1` is alpha. Treat chart `0.2.0` as a **new install contract**, not an in-place compatible bump from `0.1.x`.
+`api/v1alpha1` is alpha. Treat chart `0.2.x` as a **new install contract**, not an in-place compatible bump from `0.1.x`.
+
+## From 0.2.0 → 0.2.1
+
+In-place chart/image upgrade is supported (same CRD API).
+
+1. Upgrade to chart/image **0.2.1** (includes the eviction webhook fail-open fix and related gate/window restore fixes).
+2. No Policy/Workload annotation changes required for this bump.
+3. If you still run `0.2.0`, prefer upgrading before relying on the gate under API/cache errors — older builds could allow eviction when pod `Get` failed for non-NotFound reasons.
 
 ## From 0.1.x → 0.2.0
 
 1. **Drain / quiet the cluster** (or accept that open windows will scale back when the old controller stops).
 2. Remove old Policies / Windows if they still use removed fields (`defaultBackend`, Window `spec.backend`, REST `scale-target`).
-3. Upgrade the chart/image to `0.2.0` (CRDs ship in the chart `crds/` folder).
+3. Upgrade the chart/image to `0.2.x` (CRDs ship in the chart `crds/` folder).
 4. Re-apply Policies with required `spec.backends`, for example:
 
 ```yaml

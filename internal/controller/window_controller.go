@@ -1,5 +1,5 @@
 /*
-Copyright 2026 Vikas Verma.
+Copyright 2026 Whitemug.
 
 Licensed under the MIT License.
 See LICENSE in the project root for license information.
