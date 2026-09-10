@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/whitemug/eviction-guard?include_prereleases)](https://github.com/whitemug/eviction-guard/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/whitemug/eviction-guard.svg)](https://pkg.go.dev/github.com/whitemug/eviction-guard)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/eviction-guard)](https://artifacthub.io/packages/helm/eviction-guard/eviction-guard)
 
 Proactive protection for **voluntary node drains**: scale opted-in Deployments so spare pods are Ready **before** eviction, then let drain proceed and scale back.
 
