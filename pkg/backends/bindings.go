@@ -26,9 +26,10 @@ type Binding struct {
 
 // ResolvedStep is a catalog binding ready for planning (one integer path).
 type ResolvedStep struct {
-	Key         string
-	Target      Target
-	Annotations []string
+	Key             string
+	Target          Target
+	Annotations     []string
+	SkipDownscaling bool
 }
 
 // ParseBindings decodes eviction-guard.io/scale-backend as key[=name] tokens.
@@ -130,7 +131,8 @@ func ResolveCatalog(dep *appsv1.Deployment, policy *egv1a1.EvictionGuardPolicy, 
 					Kind:       entry.Kind,
 					FieldPath:  path,
 				},
-				Annotations: stepAnns,
+				Annotations:     stepAnns,
+				SkipDownscaling: entry.SkipDownscaling,
 			})
 		}
 	}

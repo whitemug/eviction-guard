@@ -16,6 +16,8 @@ import (
 const DefaultScaleBackAfter = time.Minute
 
 // WindowPhase is the lifecycle of a disruption window.
+// Held remains in the enum for compatibility with older Windows; new reconciles
+// no longer enter Held (use backends[].skipDownscaling for sticky capacity).
 // +kubebuilder:validation:Enum=Open;Cooling;Held;Closed
 type WindowPhase string
 
@@ -29,8 +31,20 @@ const (
 	// to cover Spec.Baseline (G1: spare is actually usable).
 	ConditionSpareReady = "SpareReady"
 
+	// ConditionCapacityApplied is True when the last capacity mutation for this
+	// window succeeded (or no patches were required). False means apply failed
+	// (admission/RBAC/conflict/other) — Eviction Guard does not special-case
+	// scaler kinds; eviction fail-opens after maxWindow (ForcedCool).
+	ConditionCapacityApplied = "CapacityApplied"
+
 	ReasonReplicasReady   = "ReplicasReady"
 	ReasonWaitingForReady = "WaitingForReady"
+	ReasonScaleApplied    = "Applied"
+	ReasonScaleFailed     = "ApplyFailed"
+	ReasonScaleRejected   = "Rejected"
+	ReasonScaleForbidden  = "Forbidden"
+	ReasonScaleConflict   = "Conflict"
+	ReasonScaleMissing    = "Missing"
 )
 
 // WorkloadReference identifies the object whose capacity was raised.
@@ -68,6 +82,10 @@ type ScaleAction struct {
 
 	// ScaledTo is the value Eviction Guard set on this object.
 	ScaledTo int32 `json:"scaledTo"`
+
+	// SkipDownscaling, when true, leaves this field at ScaledTo on scale-back
+	// (copied from the catalog entry when the window opened). Stamps are still cleared.
+	SkipDownscaling bool `json:"skipDownscaling,omitempty"`
 
 	// StampKeys are annotation keys written onto the scaled object; scale-back deletes them.
 	// +listType=atomic

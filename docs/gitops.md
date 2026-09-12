@@ -56,7 +56,7 @@ Prefer Argo’s field-level ignore when you need fine-grained coexistence.
 ## What Eviction Guard does not do
 
 - Pause Argo Applications or Flux Kustomizations  
-- Raise HPA `maxReplicas` unless you list `spec.maxReplicas` as a second path on the HPA catalog entry  
+- Raise scaler ceilings (e.g. HPA `maxReplicas`) unless you **explicitly** list that path on the catalog entry (prefer leaving headroom; otherwise a rejected patch + `maxWindow` fail-opens — [How-to](howto.md#capacity-apply-failures-and-maxwindow-failover))  
 - Prevent sync when GitOps is misconfigured — you will see scale thrash (EVG up, sync down)
 
 Next: [Metrics](metrics.md) · [Configure](configure.md) · [How-to](howto.md).

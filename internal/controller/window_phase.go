@@ -52,8 +52,7 @@ type windowPhaseDecision struct {
 	RetainClosed bool
 }
 
-// decideWindowStep encodes the Open → Cooling → Closed / Held priority order.
-// HPA Held is decided later when stepBeginScaleBack runs scaleBackIfAllowed.
+// decideWindowStep encodes the Open → Cooling → Closed priority order.
 func decideWindowStep(in windowPhaseInput) windowPhaseDecision {
 	if in.LiveAtRisk > 0 && !in.ForceCool {
 		return windowPhaseDecision{

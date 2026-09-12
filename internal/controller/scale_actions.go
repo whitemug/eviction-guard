@@ -19,17 +19,18 @@ import (
 	"github.com/whitemug/eviction-guard/pkg/backends"
 )
 
-func scaleAction(key string, t backends.Target, baseline, scaledTo int32, stampKeys []string) egv1a1.ScaleAction {
+func scaleAction(key string, t backends.Target, baseline, scaledTo int32, stampKeys []string, skipDownscaling bool) egv1a1.ScaleAction {
 	return egv1a1.ScaleAction{
-		Key:        key,
-		APIVersion: t.APIVersion,
-		Kind:       t.Kind,
-		Namespace:  t.Namespace,
-		Name:       t.Name,
-		FieldPath:  t.FieldPath,
-		Baseline:   baseline,
-		ScaledTo:   scaledTo,
-		StampKeys:  stampKeys,
+		Key:             key,
+		APIVersion:      t.APIVersion,
+		Kind:            t.Kind,
+		Namespace:       t.Namespace,
+		Name:            t.Name,
+		FieldPath:       t.FieldPath,
+		Baseline:        baseline,
+		ScaledTo:        scaledTo,
+		SkipDownscaling: skipDownscaling,
+		StampKeys:       stampKeys,
 	}
 }
 
@@ -50,7 +51,7 @@ func actionKey(a egv1a1.ScaleAction) string {
 }
 
 func findAction(actions []egv1a1.ScaleAction, key string, t backends.Target) *egv1a1.ScaleAction {
-	want := actionKey(scaleAction(key, t, 0, 0, nil))
+	want := actionKey(scaleAction(key, t, 0, 0, nil, false))
 	for i := range actions {
 		if actionKey(actions[i]) == want {
 			return &actions[i]

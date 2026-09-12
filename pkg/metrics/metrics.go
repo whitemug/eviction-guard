@@ -49,6 +49,11 @@ var (
 		Help: "1 when a window is open but spare pods are not yet Ready off the vulnerable node(s).",
 	}, []string{"policy", "namespace", "workload"})
 
+	CapacityApplyError = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "evg_capacity_apply_error",
+		Help: "1 when the last capacity patch for a window failed (admission/RBAC/other); spare may not land until fixed or maxWindow force-cools.",
+	}, []string{"policy", "namespace", "workload"})
+
 	DeferredWorkloads = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "evg_deferred_workloads",
 		Help: "At-risk opted-in Deployments waiting for a maxConcurrentWindows slot.",
@@ -69,6 +74,6 @@ func init() {
 	metrics.Registry.MustRegister(
 		VulnerableNodes, MatchedNodes,
 		AtRiskPods, DesiredReplicas, CurrentSpare,
-		ScaleActions, SpareNotReady, DeferredWorkloads, MaxWindowExceeded, EvictionDecisions,
+		ScaleActions, SpareNotReady, CapacityApplyError, DeferredWorkloads, MaxWindowExceeded, EvictionDecisions,
 	)
 }

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,7 +43,7 @@ const (
 	msgMaxWindow       = "maxWindow exceeded; forcing cooldown"
 )
 
-// WindowReconciler closes disruption windows: SpareReady, cooldown, HPA-aware floor, then scale-back.
+// WindowReconciler closes disruption windows: SpareReady, cooldown, then scale-back.
 type WindowReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
@@ -176,12 +175,8 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return openRequeue(policy, win, now), nil
 
 	case stepBeginScaleBack:
-		held, err := r.scaleBackIfAllowed(ctx, win)
-		if err != nil {
+		if err := r.scaleBackIfAllowed(ctx, win); err != nil {
 			return ctrl.Result{}, err
-		}
-		if held {
-			return ctrl.Result{RequeueAfter: time.Minute}, nil
 		}
 		dep, err := workloadDeployment(ctx, r.Client, win.Spec.Target.Namespace, win.Spec.Target.Name)
 		if err != nil {
@@ -286,33 +281,8 @@ func (r *WindowReconciler) abortCooldown(ctx context.Context, win *egv1a1.Evicti
 	return stampCooldown(ctx, r.Client, policy, dep, win, time.Time{})
 }
 
-func (r *WindowReconciler) scaleFloor(ctx context.Context, win *egv1a1.EvictionGuardWindow) (int32, bool, error) {
-	floor := win.Spec.Baseline
-	hpa, err := r.hpaFor(ctx, win)
-	if err != nil {
-		return 0, false, err
-	}
-	if hpa == nil {
-		return floor, false, nil
-	}
-	min := int32(1)
-	if hpa.Spec.MinReplicas != nil {
-		min = *hpa.Spec.MinReplicas
-	}
-	// Desired/current equal to ScaledTo is our own scale-up echoing through HPA — still scale back.
-	// Hold only when HPA has moved *past* the spare we added (genuine load), not when it is
-	// merely pinned to a stale MinReplicas after ScaledTo shrank (at-risk count dropped).
-	if hpa.Status.DesiredReplicas > win.Spec.ScaledTo && hpa.Status.DesiredReplicas > min {
-		return floor, true, nil
-	}
-	if hpa.Status.CurrentReplicas > win.Spec.ScaledTo && hpa.Status.CurrentReplicas > min {
-		return floor, true, nil
-	}
-	return floor, false, nil
-}
-
 func (r *WindowReconciler) scaleBackAndUnfinalize(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
-	if err := restoreActions(ctx, r.Client, win, win.Spec.Baseline); err != nil && !apierrors.IsNotFound(err) {
+	if err := restoreActions(ctx, r.Client, win); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
 	if controllerutil.ContainsFinalizer(win, egv1a1.WindowFinalizer) {
@@ -325,29 +295,19 @@ func (r *WindowReconciler) scaleBackAndUnfinalize(ctx context.Context, win *egv1
 	return ctrl.Result{}, nil
 }
 
-func (r *WindowReconciler) scaleBackIfAllowed(ctx context.Context, win *egv1a1.EvictionGuardWindow) (held bool, err error) {
-	floor, hold, err := r.scaleFloor(ctx, win)
-	if err != nil {
-		return false, err
-	}
-	if hold {
-		if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseHeld, "HPA is holding or raising capacity; not fighting"); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	if err := restoreActions(ctx, r.Client, win, floor); err != nil {
+func (r *WindowReconciler) scaleBackIfAllowed(ctx context.Context, win *egv1a1.EvictionGuardWindow) error {
+	if err := restoreActions(ctx, r.Client, win); err != nil {
 		metrics.ScaleActions.WithLabelValues(win.Spec.PolicyName, "down", windowMetricBackend(win), "error").Inc()
-		return false, err
+		return err
 	}
 	metrics.ScaleActions.WithLabelValues(win.Spec.PolicyName, "down", windowMetricBackend(win), "ok").Inc()
 	clearWorkloadPlanMetrics(win.Spec.PolicyName, win.Spec.Target.Namespace, win.Spec.Target.Name)
-	emitf(r.Recorder, win, corev1.EventTypeNormal, reasonScaledBack, "restored capacity to %d", floor)
-	return false, nil
+	emitf(r.Recorder, win, corev1.EventTypeNormal, reasonScaledBack, "restored capacity to baseline %d", win.Spec.Baseline)
+	return nil
 }
 
 func (r *WindowReconciler) scaleBackAndClose(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
-	if err := restoreActions(ctx, r.Client, win, win.Spec.Baseline); err != nil && !apierrors.IsNotFound(err) {
+	if err := restoreActions(ctx, r.Client, win); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
 	return r.scaleBackAndUnfinalize(ctx, win)
@@ -358,9 +318,14 @@ func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.Eviction
 	if err != nil {
 		return err
 	}
+	now := metav1.NewTime(r.now())
 	oldReady, oldSafe := win.Status.ReadyReplicas, win.Status.SafeReadyReplicas
 	before := win.Status.SpareReady
-	transitioned := applySpareStatus(win, ready, safe, metav1.NewTime(r.now()))
+	transitioned := applySpareStatus(win, ready, safe, now)
+	blocked := capacityAppliedBlocked(win)
+	if blocked && (msg == msgWaitingSpare || msg == msgNodesVulnerable) {
+		msg = applyErrorMessage(msg, win)
+	}
 	if transitioned {
 		if win.Status.SpareReady && !before {
 			emitf(r.Recorder, win, corev1.EventTypeNormal, reasonSpareReady,
@@ -377,35 +342,6 @@ func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.Eviction
 	win.Status.Phase = phase
 	win.Status.Message = msg
 	return r.Status().Update(ctx, win)
-}
-
-func (r *WindowReconciler) hpaFor(ctx context.Context, win *egv1a1.EvictionGuardWindow) (*autoscalingv1.HorizontalPodAutoscaler, error) {
-	for _, a := range win.ScaleActions() {
-		if a.Kind != "HorizontalPodAutoscaler" {
-			continue
-		}
-		hpa := &autoscalingv1.HorizontalPodAutoscaler{}
-		ns := a.Namespace
-		if ns == "" {
-			ns = win.Namespace
-		}
-		err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: a.Name}, hpa)
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return hpa, err
-	}
-	list := &autoscalingv1.HorizontalPodAutoscalerList{}
-	if err := r.List(ctx, list, client.InNamespace(win.Spec.Target.Namespace)); err != nil {
-		return nil, err
-	}
-	for i := range list.Items {
-		ref := list.Items[i].Spec.ScaleTargetRef
-		if ref.Name == win.Spec.Target.Name && (ref.Kind == "" || ref.Kind == win.Spec.Target.Kind) {
-			return &list.Items[i], nil
-		}
-	}
-	return nil, nil
 }
 
 func windowMetricBackend(win *egv1a1.EvictionGuardWindow) string {
@@ -445,32 +381,5 @@ func (r *WindowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Node{}, mapNode).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestsFromMapFunc(r.workloadToWindows)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.podToWindows)).
-		Watches(&autoscalingv1.HorizontalPodAutoscaler{}, handler.EnqueueRequestsFromMapFunc(r.hpaToWindows)).
 		Complete(r)
-}
-
-func (r *WindowReconciler) hpaToWindows(ctx context.Context, obj client.Object) []reconcile.Request {
-	hpa, ok := obj.(*autoscalingv1.HorizontalPodAutoscaler)
-	if !ok {
-		return nil
-	}
-	list := &egv1a1.EvictionGuardWindowList{}
-	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
-		return nil
-	}
-	var reqs []reconcile.Request
-	for i := range list.Items {
-		w := &list.Items[i]
-		if hpa.Spec.ScaleTargetRef.Name == w.Spec.Target.Name {
-			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}})
-			continue
-		}
-		for _, a := range w.ScaleActions() {
-			if a.Kind == "HorizontalPodAutoscaler" && a.Name == hpa.Name {
-				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}})
-				break
-			}
-		}
-	}
-	return reqs
 }

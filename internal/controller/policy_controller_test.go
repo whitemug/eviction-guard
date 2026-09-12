@@ -9,14 +9,19 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
@@ -123,7 +128,7 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &autoscalingv1.HorizontalPodAutoscaler{}).
+		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{}).
 		WithIndex(&corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
 			n := o.(*corev1.Pod).Spec.NodeName
 			if n == "" {
@@ -521,7 +526,7 @@ func TestPolicyScalesDeploymentAndHPA(t *testing.T) {
 	}
 }
 
-func TestWindowHeldWhenHPAPastSpare(t *testing.T) {
+func TestWindowRestoresDespiteWorkloadPastSpare(t *testing.T) {
 	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
 		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
 	})
@@ -553,13 +558,11 @@ func TestWindowHeldWhenHPAPastSpare(t *testing.T) {
 	}
 	putSafeReadyPods(t, c, 3)
 
-	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	hpa.Status.DesiredReplicas = 6
-	hpa.Status.CurrentReplicas = 6
-	if err := c.Status().Update(ctx, hpa); err != nil {
+	dep.Status.Replicas = 6
+	if err := c.Status().Update(ctx, dep); err != nil {
 		t.Fatal(err)
 	}
 
@@ -571,18 +574,84 @@ func TestWindowHeldWhenHPAPastSpare(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
 		t.Fatal(err)
 	}
-	if win.Status.Phase != egv1a1.WindowPhaseHeld {
-		t.Fatalf("phase=%s, want Held", win.Status.Phase)
+	if win.Status.Phase != egv1a1.WindowPhaseCooling {
+		t.Fatalf("phase=%s, want Cooling (restore always reverts to baseline)", win.Status.Phase)
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	if *dep.Spec.Replicas != 4 {
-		t.Fatalf("replicas=%d, want still 4 while Held", *dep.Spec.Replicas)
+	if *dep.Spec.Replicas != 3 {
+		t.Fatalf("replicas=%d, want baseline 3 after restore", *dep.Spec.Replicas)
 	}
 }
 
-func TestHPAOnlyRestoreClampsToCurrentReplicas(t *testing.T) {
+func TestWindowSkipDownscalingLeavesDeploymentElevated(t *testing.T) {
+	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	policy := &egv1a1.EvictionGuardPolicy{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "spot-workers"}, policy); err != nil {
+		t.Fatal(err)
+	}
+	entry := policy.Spec.Backends["deployment"]
+	entry.SkipDownscaling = true
+	policy.Spec.Backends["deployment"] = entry
+	if err := c.Update(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	dep.Annotations = map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa"}
+	if err := c.Update(ctx, dep); err != nil {
+		t.Fatal(err)
+	}
+	putHPA(t, c, 2)
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	raised := *dep.Spec.Replicas
+
+	node := &corev1.Node{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "worker-1"}, node); err != nil {
+		t.Fatal(err)
+	}
+	node.Spec.Taints = nil
+	if err := c.Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	putSafeReadyPods(t, c, 3)
+
+	winName := WindowName("spot-workers", "app", "web")
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if *dep.Spec.Replicas != raised {
+		t.Fatalf("replicas=%d, want %d (skipDownscaling)", *dep.Spec.Replicas, raised)
+	}
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+		t.Fatal(err)
+	}
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 2 {
+		t.Fatalf("minReplicas=%v, want baseline 2", hpa.Spec.MinReplicas)
+	}
+}
+
+func TestHPAOnlyRestoreRevertsToBaseline(t *testing.T) {
 	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
 		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
 	})
@@ -621,13 +690,11 @@ func TestHPAOnlyRestoreClampsToCurrentReplicas(t *testing.T) {
 	}
 	putSafeReadyPods(t, c, 3)
 
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, dep); err != nil {
 		t.Fatal(err)
 	}
-	// Below ScaledTo so we do not Held; CurrentReplicas above baseline so G4 clamp applies.
-	hpa.Status.DesiredReplicas = 3
-	hpa.Status.CurrentReplicas = 3
-	if err := c.Status().Update(ctx, hpa); err != nil {
+	dep.Status.Replicas = 3
+	if err := c.Status().Update(ctx, dep); err != nil {
 		t.Fatal(err)
 	}
 
@@ -640,9 +707,132 @@ func TestHPAOnlyRestoreClampsToCurrentReplicas(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, hpa); err != nil {
 		t.Fatal(err)
 	}
-	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 3 {
-		t.Fatalf("minReplicas=%v, want 3 (clamped to currentReplicas, not baseline 2)", ptrVal(hpa.Spec.MinReplicas))
+	if hpa.Spec.MinReplicas == nil || *hpa.Spec.MinReplicas != 2 {
+		t.Fatalf("minReplicas=%v, want baseline 2", ptrVal(hpa.Spec.MinReplicas))
 	}
+}
+
+func TestWindowOpensDespiteCapacityApplyFailure(t *testing.T) {
+	scheme := testScheme(t)
+	replicas := int32(3)
+	trueVal := true
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "app", UID: "dep-uid",
+			Annotations: map[string]string{egv1a1.ScaleBackendAnnotation: "deployment,hpa"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"app": "web", egv1a1.ProtectedLabel: "true",
+				}},
+			},
+		},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-rs", Namespace: "app", UID: "rs-uid",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "dep-uid", Controller: &trueVal,
+			}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-pod", Namespace: "app",
+			Labels: map[string]string{"app": "web", egv1a1.ProtectedLabel: "true"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-rs", UID: "rs-uid", Controller: &trueVal,
+			}},
+		},
+		Spec: corev1.PodSpec{NodeName: "worker-1"},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-1", Labels: map[string]string{"karpenter.sh/capacity-type": "spot"}},
+		Spec:       corev1.NodeSpec{Taints: []corev1.Taint{{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule}}},
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "app"}}
+	policy := &egv1a1.EvictionGuardPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-workers", UID: "policy-uid", Finalizers: []string{egv1a1.PolicyFinalizer}},
+		Spec: egv1a1.EvictionGuardPolicySpec{
+			NodeFilter:    egv1a1.NodeFilter{CapacityTypes: []string{"spot"}},
+			SpareReplicas: ptr.To(int32(1)),
+			MaxBuffer:     ptr.To(int32(4)),
+			Backends:      defaultCatalogBackends(),
+		},
+	}
+	min := int32(2)
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
+			MinReplicas:    &min,
+			MaxReplicas:    10,
+			ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{Kind: "Deployment", Name: "web", APIVersion: "apps/v1"},
+		},
+		Status: autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 3, DesiredReplicas: 3},
+	}
+
+	base := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{}).
+		WithIndex(&corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
+			n := o.(*corev1.Pod).Spec.NodeName
+			if n == "" {
+				return nil
+			}
+			return []string{n}
+		}).
+		WithObjects(ns, dep, rs, pod, node, policy, hpa).
+		Build()
+
+	c := &rejectHPAPatchClient{Client: base}
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	pr := &PolicyReconciler{Client: c, Scheme: scheme, Recorder: events.NewFakeRecorder(16), Now: func() time.Time { return now }}
+	wr := &WindowReconciler{Client: c, Scheme: scheme, Recorder: events.NewFakeRecorder(16), Now: func() time.Time { return now }}
+	ctx := context.Background()
+
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+	winName := WindowName("spot-workers", "app", "web")
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(win.Status.Conditions, egv1a1.ConditionCapacityApplied)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != egv1a1.ReasonScaleRejected {
+		t.Fatalf("CapacityApplied=%+v, want False/Rejected", cond)
+	}
+	if !strings.Contains(win.Status.Message, "maxWindow") {
+		t.Fatalf("message=%q, want maxWindow failover hint", win.Status.Message)
+	}
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(win.Status.Message, "maxWindow") {
+		t.Fatalf("window message should keep apply failure hint: %q", win.Status.Message)
+	}
+}
+
+// rejectHPAPatchClient fails Patch/Update on HorizontalPodAutoscaler with Invalid.
+type rejectHPAPatchClient struct {
+	client.Client
+}
+
+func (c *rejectHPAPatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if _, ok := obj.(*autoscalingv1.HorizontalPodAutoscaler); ok {
+		return apierrors.NewInvalid(schema.GroupKind{Group: "autoscaling", Kind: "HorizontalPodAutoscaler"}, obj.GetName(), nil)
+	}
+	// Unstructured HPA patches from the generic field backend.
+	if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "HorizontalPodAutoscaler" {
+		return apierrors.NewInvalid(schema.GroupKind{Group: "autoscaling", Kind: "HorizontalPodAutoscaler"}, obj.GetName(), nil)
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
 func ptrVal(p *int32) int32 {

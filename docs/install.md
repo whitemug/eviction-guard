@@ -15,7 +15,7 @@ Tagged release:
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.1 \
+  --version 0.2.2 \
   --namespace eviction-guard-system --create-namespace
 kubectl apply -f examples/policy-spot.yaml
 kubectl apply -f examples/workload.yaml
@@ -51,23 +51,24 @@ Point `config/default/kustomization.yaml` `images` at the image you built.
 
 ## HA and resources
 
-Default: **one replica**, leader election on.
+Default: **`replicaCount: 2`** (webhook HA under `failurePolicy: Fail`), leader election on. Override with `--set replicaCount=1` for tiny/dev clusters.
 
 ```bash
 helm upgrade --install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.1 \
-  --namespace eviction-guard-system --create-namespace \
-  --set replicaCount=2
+  --version 0.2.2 \
+  --namespace eviction-guard-system --create-namespace
+# optional: --set replicaCount=1
 ```
 
 Only the leader reconciles. Standbys still serve the webhook. With `replicaCount > 1` the chart adds a PDB (`minAvailable: 1`). Leave `leaderElect: true`.
 
 | Value | Default |
 |---|---|
+| `replicaCount` | `2` |
 | `resources.requests.cpu` / `memory` | `50m` / `64Mi` |
 | `resources.limits.cpu` / `memory` | `500m` / `256Mi` |
 
-Optional: `nodeSelector`, `tolerations`, `affinity`. For two replicas, add anti-affinity so both are not on one node.
+Optional: `nodeSelector`, `tolerations`, `affinity`. Prefer pod anti-affinity so both replicas are not on one node.
 
 ## Pod security
 

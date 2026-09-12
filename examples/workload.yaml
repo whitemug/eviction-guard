@@ -4,6 +4,8 @@
 #
 # scale-backend is required: list policy.spec.backends keys to patch.
 # Token order is patch order; the first key is the SpareReady primary.
+# No scaler? Use "deployment". HPA owns capacity? Prefer "hpa"
+# (see workload-hpa.yaml).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

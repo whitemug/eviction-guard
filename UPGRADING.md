@@ -2,6 +2,16 @@
 
 `api/v1alpha1` is alpha. Treat chart `0.2.x` as a **new install contract**, not an in-place compatible bump from `0.1.x`.
 
+## From 0.2.1 → 0.2.2
+
+In-place chart/image upgrade is supported (same CRD API; no Policy/Workload annotation migration).
+
+1. Upgrade to chart/image **0.2.2**.
+2. Helm default `replicaCount` is now **2** (webhook HA under `failurePolicy: Fail`). The chart adds a PDB when `replicaCount > 1`. Use `--set replicaCount=1` if you want a single manager pod.
+3. Watch for new Window condition **`CapacityApplied`** and metric **`evg_capacity_apply_error`** when a catalog capacity patch fails. Eviction still fail-opens after `maxWindow` (`ForcedCool`); Spot policies often use `maxWindow: 15m`.
+4. **Removed** metric `evg_capacity_ceiling` (and HPA-only headroom helpers). Point dashboards/alerts at `evg_capacity_apply_error` plus Window `CapacityApplied` / Events instead.
+5. Scale-back now always restores catalog paths to **baseline**. The old load-aware `Held` / observed-replicas clamp is gone. Prefer binding **HPA or KEDA** floors (not `Deployment.replicas`) when a scaler owns the workload. If you still bind Deployment and want sticky replicas after the window, set `skipDownscaling: true` on that catalog entry.
+
 ## From 0.2.0 → 0.2.1
 
 In-place chart/image upgrade is supported (same CRD API).

@@ -27,7 +27,7 @@ A validating webhook on `pods/eviction` denies eviction of opted-in pods until s
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.1 \
+  --version 0.2.2 \
   --namespace eviction-guard-system --create-namespace
 kubectl apply -f examples/policy-spot.yaml
 kubectl apply -f examples/workload.yaml
@@ -35,7 +35,7 @@ kubectl apply -f examples/workload.yaml
 
 From a clone: `helm install eviction-guard charts/eviction-guard -n eviction-guard-system --create-namespace`.
 
-Minimal workload opt-in:
+Minimal workload opt-in (no scaler — patch Deployment replicas):
 
 ```yaml
 metadata:
@@ -47,6 +47,8 @@ spec:
       labels:
         eviction-guard.io/protected: "true"
 ```
+
+When an **HPA** owns capacity, prefer `scale-backend: hpa` ([examples/workload-hpa.yaml](examples/workload-hpa.yaml)). If you still bind Deployment alongside a scaler, set `skipDownscaling: true` on that catalog entry so Eviction Guard does not yank replicas on close.
 
 Minimal policy (Spot capacity filter; built-in signals include Karpenter / cordon — add `SpotInterrupted` when you want Spot interruption coverage, see [examples/policy-spot.yaml](examples/policy-spot.yaml)):
 
@@ -102,6 +104,7 @@ scale back → Cooling → close
 | `evg_current_spare{policy,namespace,workload}` | Extra replicas currently open |
 | `evg_scale_actions_total{policy,direction,backend,result}` | Scale-up / scale-back (`backend` = catalog key) |
 | `evg_spare_not_ready{policy,namespace,workload}` | 1 while spare not Ready off dying nodes |
+| `evg_capacity_apply_error{policy,namespace,workload}` | 1 when the last capacity patch for a window failed |
 | `evg_deferred_workloads{policy}` | Waiting for a window slot |
 | `evg_max_window_exceeded_total{...}` | Force-cooled by `maxWindow` |
 | `evg_eviction_decisions_total{decision}` | Webhook allow/deny |
@@ -120,7 +123,7 @@ See [docs/extension.md](docs/extension.md). Building from source needs **Go 1.27
 
 ## Status
 
-v1alpha1 (`0.2.1`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md).
+v1alpha1 (`0.2.2`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md).
 
 ## Community
 

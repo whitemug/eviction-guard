@@ -160,6 +160,13 @@ type BackendCatalogEntry struct {
 	// not patch it (typical for KEDA-owned ScaledObjects).
 	// +listType=atomic
 	Patches []BackendPatch `json:"patches,omitempty"`
+
+	// SkipDownscaling raises capacity on disruption but leaves integer paths at
+	// ScaledTo when the window closes (stamps are still cleared). Prefer patching
+	// an HPA/KEDA floor instead of Deployment.replicas when a scaler owns the
+	// workload; use this mainly on Deployment if you still bind it for spare
+	// and do not want Eviction Guard to yank replicas back.
+	SkipDownscaling bool `json:"skipDownscaling,omitempty"`
 }
 
 // EvictionGuardPolicySpec defines the desired state of EvictionGuardPolicy.

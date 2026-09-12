@@ -10,6 +10,7 @@ Prometheus metrics on the manager (`:8080` by default). Names are part of the ob
 | `evg_desired_replicas` | `policy`, `namespace`, `workload` | Capacity target (baseline + spare/at-risk, `maxBuffer` cap) |
 | `evg_current_spare` | `policy`, `namespace`, `workload` | `desired - baseline` while EVG is holding capacity |
 | `evg_spare_not_ready` | `policy`, `namespace`, `workload` | `1` while a window is open and spare is not Ready off dying nodes |
+| `evg_capacity_apply_error` | `policy`, `namespace`, `workload` | `1` when the last capacity patch failed (admission/RBAC/other); spare may not land until fixed or `maxWindow` |
 | `evg_deferred_workloads` | `policy` | Workloads waiting on `maxConcurrentWindows` |
 | `evg_scale_actions_total` | `policy`, `direction`, `backend`, `result` | Scale-up / scale-back attempts |
 | `evg_max_window_exceeded_total` | `policy`, `namespace`, `workload` | Windows force-cooled by `maxWindow` |

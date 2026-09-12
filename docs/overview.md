@@ -14,7 +14,7 @@ For opted-in Deployments:
 
 1. **Scale early** when a matching node shows a disruption signal (Karpenter taint, cordon, …).
 2. **Hold voluntary eviction** via a validating webhook on `pods/eviction` until spare pods are **Ready off the dying node**.
-3. **Allow one at-risk pod at a time**, then **scale back** after a cooldown (HPA-aware).
+3. **Allow one at-risk pod at a time**, then **scale back** after a cooldown (revert to baseline).
 
 ```
 disruption on node  →  scale spare  →  Eviction denied until SpareReady

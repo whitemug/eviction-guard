@@ -6,14 +6,15 @@ Operator docs: [Overview](overview.md), [Configure](configure.md), [How-to](howt
 
 1. **Proactive scale-up** before predicted eviction  
 2. **Signal-accelerated** detection (Karpenter / cloud / cordon)  
-3. **Self-healing scale-back** without fighting HPA  
-4. **Safe under load** — never force scale-down when HPA is raising  
+3. **Self-healing scale-back** — revert what we raised (baseline restore)  
+4. **Scaler-aware binding** — prefer HPA/KEDA floors over `Deployment.replicas` when a scaler owns capacity  
 
 ## Non-goals
 
 - Not an app-PDB replacement  
 - Not a general scheduler  
 - Not unpredictable failure (node crash, partition)  
+- Not inferring “don't restore” from live replica count (use `skipDownscaling`)  
 
 ## Control plane
 
@@ -38,7 +39,7 @@ Operator docs: [Overview](overview.md), [Configure](configure.md), [How-to](howt
 | Piece | Role |
 |---|---|
 | Policy reconciler | `nodeFilter` + signals → open window + scale |
-| Window reconciler | `SpareReady`, cooldown, HPA-aware restore |
+| Window reconciler | `SpareReady`, cooldown, baseline restore (`skipDownscaling` optional) |
 | Eviction webhook | Hard gate for voluntary Eviction |
 
 Signals **buy Ready time**. The webhook **sequences** drain. `protected` is membership only.
@@ -54,15 +55,17 @@ spare  = min(configured spare, maxBuffer)
 
 Other strategies (request-capacity, pure HPA floor) were considered; buffer is the default.
 
-**Anti-thrash:** do not scale back while HPA `desired`/`current` has moved *past* the spare Eviction Guard added.
+**Restore:** each Window action reverts to its recorded baseline unless the catalog entry set `skipDownscaling` (up-only). Prefer targeting scaler floors so the autoscaler owns desired count after the window.
 
 ## Scaling backends
 
 `EvictionGuardPolicy.spec.backends` is a required named catalog. Protected Deployments must set `eviction-guard.io/scale-backend` to list catalog keys (optional `key=name`). There is no default bind. Token order is patch order; the first key is the SpareReady primary. Example policies define `deployment` and `hpa` so patching is data-driven (generic CR patcher).
 
+When an HPA or KEDA ScaledObject owns the workload, bind **that** backend (raise `minReplicas` / `minReplicaCount`). Bind `Deployment.replicas` only when no scaler is present — or set `skipDownscaling: true` on Deployment if you still raise it for spare and do not want EVG to yank replicas back.
+
 Fan-out records each object on `EvictionGuardWindow.spec.actions` with its own baseline. Optional stamp annotations are separate from capacity patches.
 
-Design follow-ups: [Scale targets](design-scale-targets.md).
+Design follow-ups: [Scale targets](design-scale-targets.md) (catalog locked for 0.2.0).
 
 ## Window lifecycle
 
@@ -73,6 +76,7 @@ Design follow-ups: [Scale targets](design-scale-targets.md).
 | At-risk gone + spare Ready | Scale back; arm `windowUntil`; Cooling |
 | New at-risk during Cooling | Abort cooldown; reopen |
 | `maxWindow` exceeded | `ForcedCool`; webhook allows; scale back; tombstone until nodes clear |
+| Capacity patch rejected (admission/RBAC/…) | `CapacityApplied=False`; keep Window open; wait for spare or `maxWindow` fail-open |
 | Cooling elapsed | Close / delete |
 
 State is the `EvictionGuardWindow` CRD (not a ConfigMap).
@@ -96,7 +100,31 @@ A standing PDB on opt-in labels blocked drains the controller never intended to 
 
 ## Out of scope for v1alpha1
 
-- StatefulSet / PVC-topology constrained scaling  
+- StatefulSet / non-Deployment primary workloads — Target abstraction planned before API freeze (see **D2** below)  
 - Treating price-driven consolidation identically to capacity-preserving disruption without operator policy  
 
 Status: shipped in `cmd/main.go`, `internal/controller`, `internal/webhook`, `pkg/evictgate`, Helm + Kustomize.
+
+## Architecture decisions (2026-09)
+
+Accepted product law for the current design cut:
+
+| ID | Decision |
+|---|---|
+| D1 | Cross-namespace `scale-backend` (`key=ns/name`) stays supported; isolation is Policy/RBAC/ops, not a code deny |
+| D2 | Plan a Target abstraction (membership / SpareReady / gate beyond Deployment) before API freeze |
+| D3 | On `CapacityApplied=False`, keep deny until SpareReady or `maxWindow` ForcedCool (retry transient API failures; no early fail-open) |
+| D4 | Cluster-singleton install now; do not freeze APIs/RBAC in a way that blocks future namespace-scoped installs |
+| D5 | Chart default manager `replicaCount: 2` (webhook HA), overridable |
+| D6 | Multi-policy ownership stays lex-first-by-name + `policy-pin` (no specificity scoring) |
+| D7 | External / empty-Actions windows: `maxWindow` remains the safety valve; no dedicated stuck signals for now |
+
+Catalog / scale-backend rationale (locked for 0.2.0): [Scale targets](design-scale-targets.md).
+
+### Maintainer backlog (next)
+
+1. Target abstraction: inventory Deployment-hardcoded call sites; design membership / SpareReady / gate beyond Deployment before API freeze.  
+2. Applied-vs-planned actions on partial multi-backend apply failure.  
+3. Catalog `defaultWhenUnset` (or similar) instead of hard-coded `1`.  
+4. Window indexing / watch fan-out; chart metrics NetworkPolicy.  
+5. E2E: CapacityApplied → ForcedCool; multi-policy pin; cross-ns backend happy path.  
