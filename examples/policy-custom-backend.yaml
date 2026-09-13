@@ -16,6 +16,8 @@ spec:
       kind: Deployment
       patches:
         - path: spec.replicas
+      # Sticky Deploy when also bound with hpa/webapp (see workload-multi-backend.yaml).
+      skipDownscaling: true
     hpa:
       apiVersion: autoscaling/v1
       kind: HorizontalPodAutoscaler

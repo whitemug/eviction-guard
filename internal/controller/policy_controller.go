@@ -332,13 +332,9 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 	}
 	setWorkloadPlanMetrics(policy.Name, w.deploy.Namespace, w.deploy.Name, w.atRisk, plan.desired, plan.primaryBaseline)
 
-	scaled, err := plan.apply(ctx, r.Client, policy.Name)
-	if err != nil {
-		return err
-	}
-
+	scaled, applyErr := plan.apply(ctx, r.Client, policy.Name)
 	now := r.now()
-	if scaled {
+	if applyErr == nil && scaled {
 		emitf(r.Recorder, w.deploy, corev1.EventTypeNormal, reasonScaledUp,
 			"policy %q scaled replicas to %d (baseline %d) ahead of disruption on nodes %v",
 			policy.Name, plan.desired, plan.primaryBaseline, nodeNames)
@@ -348,7 +344,12 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 	if len(plan.steps) == 0 {
 		openMsg = "opened window for external scaler (no capacity patches)"
 	}
+	if applyErr != nil {
+		openMsg = fmt.Sprintf("capacity apply failed; eviction fail-opens after maxWindow: %v", applyErr)
+	}
 
+	// Always open/update the Window so eviction stays gated and maxWindow can
+	// fail-open even when a catalog patch is rejected (admission, RBAC, …).
 	if !exists {
 		win = &egv1a1.EvictionGuardWindow{
 			ObjectMeta: metav1.ObjectMeta{
@@ -375,18 +376,25 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 			return fmt.Errorf("ownerref: %w", err)
 		}
 		if err := r.Create(ctx, win); err != nil {
+			if applyErr != nil {
+				return fmt.Errorf("create window after apply error: %v; apply: %w", err, applyErr)
+			}
 			return err
 		}
 		win.Status.Phase = egv1a1.WindowPhaseOpen
 		win.Status.Message = openMsg
 		ts := metav1.NewTime(now)
 		win.Status.LastScaleTime = &ts
+		applyCapacityApplied(win, applyErr, ts)
 		if err := r.Status().Update(ctx, win); err != nil {
+			if applyErr != nil {
+				return fmt.Errorf("window status after apply error: %v; apply: %w", err, applyErr)
+			}
 			return err
 		}
 		emitf(r.Recorder, policy, corev1.EventTypeNormal, reasonWindowOpened,
 			"opened window %s/%s for %s", win.Namespace, win.Name, w.deploy.Name)
-		return nil
+		return applyErr
 	}
 
 	patch := client.MergeFrom(win.DeepCopy())
@@ -395,16 +403,35 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 	win.Spec.Actions = actions
 	win.Spec.WindowUntil = nil
 	if err := r.Patch(ctx, win, patch); err != nil {
+		if applyErr != nil {
+			return fmt.Errorf("patch window after apply error: %v; apply: %w", err, applyErr)
+		}
 		return err
 	}
+	statusDirty := false
 	if win.Status.Phase != egv1a1.WindowPhaseOpen {
 		win.Status.Phase = egv1a1.WindowPhaseOpen
 		win.Status.Message = "vulnerable nodes present"
+		if applyErr != nil {
+			win.Status.Message = openMsg
+		}
+		statusDirty = true
+	} else if applyErr != nil {
+		win.Status.Message = openMsg
+		statusDirty = true
+	}
+	if applyCapacityApplied(win, applyErr, metav1.NewTime(now)) {
+		statusDirty = true
+	}
+	if statusDirty {
 		if err := r.Status().Update(ctx, win); err != nil {
+			if applyErr != nil {
+				return fmt.Errorf("window status after apply error: %v; apply: %w", err, applyErr)
+			}
 			return err
 		}
 	}
-	return nil
+	return applyErr
 }
 
 func (r *PolicyReconciler) publishWorkloadMetrics(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, w *workloadState) error {
@@ -442,6 +469,7 @@ func clearWorkloadPlanMetrics(policy, ns, workload string) {
 	metrics.DesiredReplicas.WithLabelValues(policy, ns, workload).Set(0)
 	metrics.CurrentSpare.WithLabelValues(policy, ns, workload).Set(0)
 	metrics.SpareNotReady.WithLabelValues(policy, ns, workload).Set(0)
+	metrics.CapacityApplyError.WithLabelValues(policy, ns, workload).Set(0)
 }
 
 func (r *PolicyReconciler) syncClearedWindows(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, active map[string]*workloadState) error {

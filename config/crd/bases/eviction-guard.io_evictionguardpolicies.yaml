@@ -103,6 +103,14 @@ spec:
                           rule: has(self.path) || has(self.annotation)
                       type: array
                       x-kubernetes-list-type: atomic
+                    skipDownscaling:
+                      description: |-
+                        SkipDownscaling raises capacity on disruption but leaves integer paths at
+                        ScaledTo when the window closes (stamps are still cleared). Prefer patching
+                        an HPA/KEDA floor instead of Deployment.replicas when a scaler owns the
+                        workload; use this mainly on Deployment if you still bind it for spare
+                        and do not want Eviction Guard to yank replicas back.
+                      type: boolean
                   required:
                   - apiVersion
                   - kind

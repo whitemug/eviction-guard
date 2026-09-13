@@ -20,8 +20,8 @@ For integrators and maintainers:
 | Doc | Audience |
 |---|---|
 | [Extension](extension.md) | Other operators / Go plugins |
-| [Design](design.md) | Architecture and design rationale |
-| [Scale targets](design-scale-targets.md) | Backend catalog design (locked decisions) |
+| [Design](design.md) | Architecture rationale and accepted decisions (D1–D7) |
+| [Scale targets](design-scale-targets.md) | Backend catalog design (locked for 0.2.0) |
 | [Publishing](publishing.md) | Release, GHCR, Cosign |
 | [Support](../SUPPORT.md) | Where to ask questions / report bugs |
 | [Contributing](../CONTRIBUTING.md) | Dev setup and PR expectations |

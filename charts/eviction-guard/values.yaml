@@ -1,12 +1,13 @@
 image:
   repository: ghcr.io/whitemug/eviction-guard
-  tag: "0.2.1"
+  tag: "0.2.2"
   pullPolicy: IfNotPresent
 
-# One replica is enough: this controller is not on the request path.
-# Set replicaCount: 2 for HA (rolling upgrade / node drain). Only the leader
-# reconciles; standbys still serve the validating webhook. Leave leaderElect on.
-replicaCount: 1
+# Default two replicas so the validating webhook stays available during a
+# rolling upgrade / node drain (failurePolicy: Fail otherwise blocks opted-in
+# drains). Override with --set replicaCount=1 for tiny/dev clusters. Only the
+# leader reconciles; standbys still serve the webhook. Leave leaderElect on.
+replicaCount: 2
 
 nameOverride: ""
 fullnameOverride: ""
@@ -110,6 +111,7 @@ defaultPolicy:
       kind: Deployment
       patches:
         - path: spec.replicas
+      # skipDownscaling: true  # optional: leave Deploy elevated after window
     hpa:
       apiVersion: autoscaling/v1
       kind: HorizontalPodAutoscaler

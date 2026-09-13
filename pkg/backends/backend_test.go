@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -103,29 +102,6 @@ func TestPatchAnnotationsOnDeployment(t *testing.T) {
 	}
 	if len(got.Annotations) != 0 {
 		t.Fatalf("expected stamps cleared, got %v", got.Annotations)
-	}
-}
-
-func TestScaleDownMinReplicasDoesNotGoBelowCurrent(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = autoscalingv1.AddToScheme(scheme)
-	min := int32(4)
-	hpa := &autoscalingv1.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
-		Spec:       autoscalingv1.HorizontalPodAutoscalerSpec{MinReplicas: &min, MaxReplicas: 10},
-		Status:     autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 6},
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hpa).Build()
-	tgt := backends.Target{ObjectKey: client.ObjectKey{Namespace: "app", Name: "web"}}
-	if err := backends.ScaleDownMinReplicas(context.Background(), c, tgt, 3); err != nil {
-		t.Fatal(err)
-	}
-	got := &autoscalingv1.HorizontalPodAutoscaler{}
-	if err := c.Get(context.Background(), tgt.ObjectKey, got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Spec.MinReplicas == nil || *got.Spec.MinReplicas != 6 {
-		t.Fatalf("minReplicas=%v, want 6 (held at currentReplicas)", got.Spec.MinReplicas)
 	}
 }
 

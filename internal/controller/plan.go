@@ -15,7 +15,6 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -34,12 +33,13 @@ type scalePlan struct {
 }
 
 type scaleStep struct {
-	key       string
-	target    backends.Target
-	baseline  int32
-	desired   int32
-	stamp     map[string]string
-	stampKeys []string
+	key             string
+	target          backends.Target
+	baseline        int32
+	desired         int32
+	stamp           map[string]string
+	stampKeys       []string
+	skipDownscaling bool
 }
 
 func buildPlan(ctx context.Context, c client.Client, policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment, atRisk int32, existing []egv1a1.ScaleAction, stickyBaseline int32) (*scalePlan, error) {
@@ -91,12 +91,13 @@ func buildPlan(ctx context.Context, c client.Client, policy *egv1a1.EvictionGuar
 			keys = append(keys, a)
 		}
 		plan.steps = append(plan.steps, scaleStep{
-			key:       step.Key,
-			target:    step.Target,
-			baseline:  baseline,
-			desired:   plan.desired,
-			stamp:     anns,
-			stampKeys: uniqueStrings(keys),
+			key:             step.Key,
+			target:          step.Target,
+			baseline:        baseline,
+			desired:         plan.desired,
+			stamp:           anns,
+			stampKeys:       uniqueStrings(keys),
+			skipDownscaling: step.SkipDownscaling,
 		})
 	}
 	return plan, nil
@@ -221,7 +222,7 @@ func metricBackend(s scaleStep) string {
 func (p *scalePlan) actions(existing []egv1a1.ScaleAction) []egv1a1.ScaleAction {
 	var next []egv1a1.ScaleAction
 	for _, s := range p.steps {
-		next = append(next, scaleAction(s.key, s.target, s.baseline, s.desired, s.stampKeys))
+		next = append(next, scaleAction(s.key, s.target, s.baseline, s.desired, s.stampKeys, s.skipDownscaling))
 	}
 	if len(p.steps) == 0 {
 		// External-only: no capacity patches; do not keep stale actions from an older catalog.
@@ -230,33 +231,33 @@ func (p *scalePlan) actions(existing []egv1a1.ScaleAction) []egv1a1.ScaleAction 
 	return mergeActions(existing, next)
 }
 
-func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, deployFloor int32) error {
+func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow) error {
 	// Top-to-bottom Spec.Actions order. Consecutive paths on the same object
-	// restore in one merge patch (no reordering).
+	// restore in one merge patch (no reordering). Each action reverts to its
+	// own baseline unless SkipDownscaling is set (up-only).
 	actions := win.ScaleActions()
-	coord := hasDeployAction(actions) && hasHPAMinAction(actions)
 	for i := 0; i < len(actions); {
 		a := actions[i]
-		target := actionTarget(a)
-		if target.Namespace == "" {
-			target.Namespace = win.Namespace
+		if a.Namespace == "" {
+			a.Namespace = win.Namespace
 		}
+		target := actionTarget(a)
 		group := []egv1a1.ScaleAction{a}
 		j := i + 1
 		for j < len(actions) {
-			tj := actionTarget(actions[j])
-			if tj.Namespace == "" {
-				tj.Namespace = win.Namespace
+			aj := actions[j]
+			if aj.Namespace == "" {
+				aj.Namespace = win.Namespace
 			}
-			if !sameScaleObject(target, tj) {
+			if !sameScaleObject(target, actionTarget(aj)) {
 				break
 			}
-			group = append(group, actions[j])
+			group = append(group, aj)
 			j++
 		}
 
 		if len(group) == 1 {
-			if err := restoreOneAction(ctx, c, win, group[0], deployFloor, coord); err != nil {
+			if err := restoreOneAction(ctx, c, group[0]); err != nil {
 				if apierrors.IsNotFound(err) {
 					i = j
 					continue
@@ -264,7 +265,7 @@ func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGu
 				return err
 			}
 		} else {
-			if err := restoreGroupedActions(ctx, c, win, group, deployFloor, coord); err != nil {
+			if err := restoreGroupedActions(ctx, c, group); err != nil {
 				if apierrors.IsNotFound(err) {
 					i = j
 					continue
@@ -278,40 +279,25 @@ func restoreActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGu
 }
 
 // restoreGroupedActions restores consecutive paths on one object as a single merge patch.
-func restoreGroupedActions(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, group []egv1a1.ScaleAction, deployFloor int32, coord bool) error {
+func restoreGroupedActions(ctx context.Context, c client.Client, group []egv1a1.ScaleAction) error {
 	target := actionTarget(group[0])
-	if target.Namespace == "" {
-		target.Namespace = win.Namespace
-	}
 	var paths []string
 	values := map[string]int32{}
 	var stampKeys []string
 	for _, ga := range group {
 		gt := actionTarget(ga)
-		if gt.Namespace == "" {
-			gt.Namespace = win.Namespace
-		}
-		floor := ga.Baseline
-		if isDeployAction(ga) {
-			floor = deployFloor
+		stampKeys = append(stampKeys, ga.StampKeys...)
+		if ga.SkipDownscaling {
+			continue
 		}
 		current, err := backends.Current(ctx, c, gt)
 		if err != nil {
 			return wrapBackendErr(gt, err)
 		}
-		if isHPAMinAction(ga) && !coord {
-			// G4: never lower minReplicas below status.currentReplicas (same as restoreOneAction).
-			hpaFloor, err := hpaMinRestoreFloor(ctx, c, gt, floor)
-			if err != nil {
-				return wrapBackendErr(gt, err)
-			}
-			floor = hpaFloor
-		}
 		paths = append(paths, gt.FieldPath)
-		if current > floor {
-			values[gt.FieldPath] = floor
+		if current > ga.Baseline {
+			values[gt.FieldPath] = ga.Baseline
 		}
-		stampKeys = append(stampKeys, ga.StampKeys...)
 	}
 	if len(values) > 0 {
 		if err := backends.PatchIntegers(ctx, c, target, paths, values); err != nil {
@@ -324,43 +310,15 @@ func restoreGroupedActions(ctx context.Context, c client.Client, win *egv1a1.Evi
 	return nil
 }
 
-// hpaMinRestoreFloor applies G4 when restoring HPA minReplicas without a coordinated Deployment restore.
-func hpaMinRestoreFloor(ctx context.Context, c client.Client, t backends.Target, baseline int32) (int32, error) {
-	hpa := &autoscalingv1.HorizontalPodAutoscaler{}
-	if err := c.Get(ctx, t.ObjectKey, hpa); err != nil {
-		return 0, err
-	}
-	if hpa.Status.CurrentReplicas > baseline {
-		return hpa.Status.CurrentReplicas, nil
-	}
-	return baseline, nil
-}
-
-func restoreOneAction(ctx context.Context, c client.Client, win *egv1a1.EvictionGuardWindow, a egv1a1.ScaleAction, deployFloor int32, coord bool) error {
+func restoreOneAction(ctx context.Context, c client.Client, a egv1a1.ScaleAction) error {
 	target := actionTarget(a)
-	if target.Namespace == "" {
-		target.Namespace = win.Namespace
-	}
-	current, err := backends.Current(ctx, c, target)
-	if err != nil {
-		return wrapBackendErr(target, err)
-	}
-	floor := a.Baseline
-	if isDeployAction(a) {
-		floor = deployFloor
-	}
-	if current > floor {
-		switch {
-		case isHPAMinAction(a) && coord:
-			if err := backends.RestoreMinReplicas(ctx, c, target, floor); err != nil {
-				return wrapBackendErr(target, err)
-			}
-		case isHPAMinAction(a):
-			if err := backends.ScaleDownMinReplicas(ctx, c, target, floor); err != nil {
-				return wrapBackendErr(target, err)
-			}
-		default:
-			if err := backends.ScaleDown(ctx, c, target, floor); err != nil {
+	if !a.SkipDownscaling {
+		current, err := backends.Current(ctx, c, target)
+		if err != nil {
+			return wrapBackendErr(target, err)
+		}
+		if current > a.Baseline {
+			if err := backends.ScaleDown(ctx, c, target, a.Baseline); err != nil {
 				return wrapBackendErr(target, err)
 			}
 		}
@@ -369,37 +327,6 @@ func restoreOneAction(ctx context.Context, c client.Client, win *egv1a1.Eviction
 		return wrapBackendErr(target, err)
 	}
 	return nil
-}
-
-func hasDeployAction(actions []egv1a1.ScaleAction) bool {
-	for _, a := range actions {
-		if isDeployAction(a) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasHPAMinAction(actions []egv1a1.ScaleAction) bool {
-	for _, a := range actions {
-		if isHPAMinAction(a) {
-			return true
-		}
-	}
-	return false
-}
-
-func isDeployAction(a egv1a1.ScaleAction) bool {
-	return a.Kind == "Deployment"
-}
-
-// isHPAMinAction is the HPA floor path that must not fight status.currentReplicas (G4).
-// Other HPA fields (e.g. spec.maxReplicas) use the generic field patcher.
-func isHPAMinAction(a egv1a1.ScaleAction) bool {
-	if a.Kind != "HorizontalPodAutoscaler" {
-		return false
-	}
-	return a.FieldPath == "" || a.FieldPath == "spec.minReplicas"
 }
 
 func workloadDeployment(ctx context.Context, c client.Client, ns, name string) (*appsv1.Deployment, error) {

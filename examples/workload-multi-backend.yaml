@@ -1,7 +1,9 @@
 # Raise Deployment replicas and the HPA floor together.
-# Keys must exist on the owning policy's spec.backends — apply examples/policy-spot.yaml
-# (or policy-custom-backend.yaml for an app CR catalog entry).
-# First token is the SpareReady primary — keep deployment first.
+# Keys must exist on the owning policy's spec.backends — apply
+# examples/policy-custom-backend.yaml (deployment has skipDownscaling so EVG
+# does not yank Deploy replicas on close; HPA min restores to baseline).
+# Prefer scale-backend: hpa alone when the HPA fully owns capacity
+# (see examples/workload-hpa.yaml).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

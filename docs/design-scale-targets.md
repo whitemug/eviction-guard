@@ -2,6 +2,8 @@
 
 Status: **decisions locked for 0.2.0** (multi-policy ownership + backend catalog shipped). This is design rationale, not a day-2 operator guide — see [Configure](configure.md) and [Extension](extension.md). Core architecture: [Design](design.md).
 
+**Follow-up (2026-09):** expand membership / SpareReady beyond Deployment via a Target abstraction before API freeze — [Design](design.md) **D2**.
+
 ## Problem
 
 Eviction Guard’s workload unit is a **Deployment**:
@@ -67,6 +69,8 @@ spec:
       patches:
         - path: spec.minReplicaCount
     # Or omit patches for external / metrics-only ScaledObject.
+    # skipDownscaling: true on an entry raises capacity but leaves paths
+    # at ScaledTo when the window closes (prefer scaler floors instead).
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -85,6 +89,7 @@ spec:
 
 - `eviction-guard.io/scale-backend` is **required** on protected Deployments; there is no implicit Deployment-kind bind.
 - Bare names on the annotation default to the Deployment’s namespace and name; optional `ns/name` for cross-namespace.
+- Prefer HPA/KEDA floors when a scaler owns the workload; bind `Deployment.replicas` only without a scaler, or set `skipDownscaling: true` if you still raise Deployment and want sticky replicas after close.
 - Token order is patch order for entries with integer paths; the first *patched* path is the SpareReady primary. Empty-patch entries are external (no Window actions).
 
 ### Follow-ups (non-blocking)
@@ -125,6 +130,6 @@ Pin annotation or lexicographically first matching Policy name. See [Configure](
 ## Out of scope for this note
 
 - Cluster-global BackendCatalog CR  
-- StatefulSet / non-Deployment primary workloads  
+- StatefulSet / non-Deployment primary workloads — see [Design](design.md) **D2**  
 - Using `/scale` subresource instead of a JSON path  
 - Tracking-only objects that are never patched

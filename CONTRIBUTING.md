@@ -48,7 +48,7 @@ kubectl taint node <node> karpenter.sh/disrupted=:NoSchedule
 - Label / annotation **strings** in `api/v1alpha1/labels.go`
 - `pkg/plugin.RegisterSignal`, `pkg/signals.Detector`, `pkg/filters.Filter` / `FromSpec`
 - `pkg/evictgate`, `pkg/policyown`
-- Catalog helpers in `pkg/backends` (`ParseBindings`, `BindingsForWorkload`, `ResolveCatalog`, `Current` / `ScaleUp` / `ScaleDown`, `RestoreMinReplicas`)
+- Catalog helpers in `pkg/backends` (`ParseBindings`, `BindingsForWorkload`, `ResolveCatalog`, `Current` / `ScaleUp` / `ScaleDown`)
 
 Prometheus metric **names** (`evg_*`) are an observability contract; the `pkg/metrics` Go package is not.
 

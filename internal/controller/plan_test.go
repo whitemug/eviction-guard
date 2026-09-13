@@ -97,7 +97,7 @@ func TestBuildPlanExternalOnly(t *testing.T) {
 	}
 }
 
-func TestRestoreGroupedHPAMinMaxAppliesG4(t *testing.T) {
+func TestRestoreGroupedActionsUsesBaseline(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -114,7 +114,6 @@ func TestRestoreGroupedHPAMinMaxAppliesG4(t *testing.T) {
 				Kind: "Deployment", Name: "web", APIVersion: "apps/v1",
 			},
 		},
-		Status: autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 4, DesiredReplicas: 4},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&autoscalingv1.HorizontalPodAutoscaler{}).
@@ -123,6 +122,7 @@ func TestRestoreGroupedHPAMinMaxAppliesG4(t *testing.T) {
 	win := &egv1a1.EvictionGuardWindow{
 		ObjectMeta: metav1.ObjectMeta{Name: "w", Namespace: "app"},
 		Spec: egv1a1.EvictionGuardWindowSpec{
+			Target: egv1a1.WorkloadReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", Namespace: "app"},
 			Actions: []egv1a1.ScaleAction{
 				{
 					APIVersion: "autoscaling/v1", Kind: "HorizontalPodAutoscaler",
@@ -137,18 +137,18 @@ func TestRestoreGroupedHPAMinMaxAppliesG4(t *testing.T) {
 			},
 		},
 	}
-	if err := restoreActions(context.Background(), c, win, 2); err != nil {
+	if err := restoreActions(context.Background(), c, win); err != nil {
 		t.Fatal(err)
 	}
 	got := &autoscalingv1.HorizontalPodAutoscaler{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "app", Name: "web"}, got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Spec.MinReplicas == nil || *got.Spec.MinReplicas != 4 {
-		t.Fatalf("minReplicas=%v, want 4 (G4 clamp to currentReplicas, not baseline 2)", got.Spec.MinReplicas)
+	if got.Spec.MinReplicas == nil || *got.Spec.MinReplicas != 2 {
+		t.Fatalf("minReplicas=%v, want baseline 2", got.Spec.MinReplicas)
 	}
 	if got.Spec.MaxReplicas != 10 {
-		t.Fatalf("maxReplicas=%d, want 10", got.Spec.MaxReplicas)
+		t.Fatalf("maxReplicas=%d, want baseline 10", got.Spec.MaxReplicas)
 	}
 }
 
@@ -169,7 +169,6 @@ func TestRestoreActionsSkipsMissingDeployContinuesHPA(t *testing.T) {
 				Kind: "Deployment", Name: "web", APIVersion: "apps/v1",
 			},
 		},
-		Status: autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 3, DesiredReplicas: 3},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&autoscalingv1.HorizontalPodAutoscaler{}).
@@ -178,6 +177,7 @@ func TestRestoreActionsSkipsMissingDeployContinuesHPA(t *testing.T) {
 	win := &egv1a1.EvictionGuardWindow{
 		ObjectMeta: metav1.ObjectMeta{Name: "w", Namespace: "app"},
 		Spec: egv1a1.EvictionGuardWindowSpec{
+			Target: egv1a1.WorkloadReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", Namespace: "app"},
 			Actions: []egv1a1.ScaleAction{
 				{
 					APIVersion: "apps/v1", Kind: "Deployment",
@@ -192,15 +192,77 @@ func TestRestoreActionsSkipsMissingDeployContinuesHPA(t *testing.T) {
 			},
 		},
 	}
-	if err := restoreActions(context.Background(), c, win, 3); err != nil {
+	if err := restoreActions(context.Background(), c, win); err != nil {
 		t.Fatal(err)
 	}
 	got := &autoscalingv1.HorizontalPodAutoscaler{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "app", Name: "web"}, got); err != nil {
 		t.Fatal(err)
 	}
-	// Coordinated deploy+HPA: G4 skipped; min restores to baseline. Deploy missing is ignored.
 	if got.Spec.MinReplicas == nil || *got.Spec.MinReplicas != 2 {
 		t.Fatalf("minReplicas=%v, want baseline 2 after skipping missing Deployment", got.Spec.MinReplicas)
+	}
+}
+
+func TestRestoreActionsHonorsSkipDownscaling(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := egv1a1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(5))},
+	}
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
+			MinReplicas: ptr.To(int32(5)),
+			MaxReplicas: 10,
+			ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+				Kind: "Deployment", Name: "web", APIVersion: "apps/v1",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{}).
+		WithObjects(dep, hpa).Build()
+
+	win := &egv1a1.EvictionGuardWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "w", Namespace: "app"},
+		Spec: egv1a1.EvictionGuardWindowSpec{
+			Target: egv1a1.WorkloadReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", Namespace: "app"},
+			Actions: []egv1a1.ScaleAction{
+				{
+					APIVersion: "apps/v1", Kind: "Deployment",
+					Name: "web", Namespace: "app", FieldPath: "spec.replicas",
+					Baseline: 3, ScaledTo: 5, SkipDownscaling: true,
+				},
+				{
+					APIVersion: "autoscaling/v1", Kind: "HorizontalPodAutoscaler",
+					Name: "web", Namespace: "app", FieldPath: "spec.minReplicas",
+					Baseline: 2, ScaledTo: 5,
+				},
+			},
+		},
+	}
+	if err := restoreActions(context.Background(), c, win); err != nil {
+		t.Fatal(err)
+	}
+	gotDep := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "app", Name: "web"}, gotDep); err != nil {
+		t.Fatal(err)
+	}
+	if gotDep.Spec.Replicas == nil || *gotDep.Spec.Replicas != 5 {
+		t.Fatalf("replicas=%v, want 5 (skipDownscaling)", gotDep.Spec.Replicas)
+	}
+	gotHPA := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "app", Name: "web"}, gotHPA); err != nil {
+		t.Fatal(err)
+	}
+	if gotHPA.Spec.MinReplicas == nil || *gotHPA.Spec.MinReplicas != 2 {
+		t.Fatalf("minReplicas=%v, want baseline 2", gotHPA.Spec.MinReplicas)
 	}
 }

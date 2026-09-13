@@ -75,21 +75,65 @@ Rolling update applies the label to new pods. Ensure a policy `nodeFilter` cover
 
 ## Use HPA with Eviction Guard
 
+Prefer the **HPA floor** when an HPA owns the Deployment (do not fight the scaler with `Deployment.replicas`):
+
 ```yaml
+metadata:
+  annotations:
+    eviction-guard.io/scale-backend: hpa=my-hpa
+```
+
+The `hpa` key must exist on the owning policy's `spec.backends`. EVG raises `minReplicas` for the window and restores it to baseline on scale-back; the HPA keeps owning desired count under load.
+
+If you still list Deployment (e.g. for SpareReady primary) **and** an HPA:
+
+```yaml
+# policy.spec.backends
+deployment:
+  apiVersion: apps/v1
+  kind: Deployment
+  patches:
+    - path: spec.replicas
+  skipDownscaling: true   # raise for spare; do not yank replicas back
+hpa:
+  apiVersion: autoscaling/v1
+  kind: HorizontalPodAutoscaler
+  patches:
+    - path: spec.minReplicas
+```
+
+```yaml
+# workload
 metadata:
   annotations:
     eviction-guard.io/scale-backend: deployment,hpa=my-hpa
 ```
 
-The `hpa` key must exist on the owning policy's `spec.backends`. List every backend you want patched — there is no default bind. Put `deployment` first (SpareReady primary). EVG raises `minReplicas` for the window and restores it on scale-back without fighting an HPA that has already moved *above* the spare.
+Without `skipDownscaling`, EVG restores every patched path to its baseline when the window closes.
 
 GitOps (Argo/Flux) will revert those patches unless you ignore capacity fields — see [GitOps](gitops.md).
 
-### HPA `minReplicas` == `maxReplicas`
+### Cross-namespace scale backends
 
-Eviction Guard can patch **both** on one catalog entry. Paths are applied
-**top-to-bottom** in list order; consecutive paths on the same object are written
-in a single merge patch (so `min`/`max` stay valid together).
+`scale-backend` may target another namespace with `key=ns/name` (for example `hpa=platform/web-hpa`). That is intentional. Isolation is RBAC and who may annotate workloads / create Policies — not an in-operator same-namespace deny. See [Configure](configure.md) and [SECURITY](../SECURITY.md).
+
+### Capacity apply failures (and `maxWindow` failover)
+
+Catalog patches are Kind-agnostic. When the API rejects a capacity write (for example HPA admission when `minReplicas` would exceed `maxReplicas`, missing RBAC, conflict, or transient API-server pressure):
+
+1. The Window **still opens** so eviction stays gated
+2. Condition **`CapacityApplied=False`** with reason `Rejected` / `Forbidden` / `Conflict` / `ApplyFailed` / `Missing`
+3. Status message notes the error and that eviction **fail-opens after `maxWindow`** (`ForcedCool`)
+4. Metric `evg_capacity_apply_error=1` until a later apply succeeds or the window clears
+
+Transient failures (throttling, conflicts, brief overload) are expected to succeed on a later reconcile under the **same** `maxWindow` clock — Eviction Guard does not fail-open early just because an apply failed. Tune `maxWindow` for how long you are willing to wait for spare before drains proceed unprotected — Spot policies often use **10–15m** instead of the **2h** default:
+
+```yaml
+spec:
+  maxWindow: 15m   # force-cool if spare cannot land (e.g. capacity patch rejected)
+```
+
+Optional: list **both** floor and ceiling paths on a catalog entry if you *want* Eviction Guard to raise the ceiling with the spare target (raise-only when `current < desired`). That is an explicit operator choice — prefer leaving headroom and relying on `maxWindow` failover when a patch is rejected.
 
 ```yaml
 backends:
@@ -98,14 +142,10 @@ backends:
     kind: HorizontalPodAutoscaler
     patches:
       - path: spec.minReplicas
-      - path: spec.maxReplicas
+      - path: spec.maxReplicas   # optional; only if you want EG to raise max
 ```
 
-Each path becomes its own Window action (own baseline); both are set to the shared desired capacity. That way `min == max == 5` can become `6`/`6` so a spare can schedule.
-
-If you only patch `minReplicas` and leave `maxReplicas` at 5, HPA cannot run more than 5 pods → `SpareReady` stays false → eviction stays denied until you raise max, free capacity, or hit `maxWindow` (`ForcedCool`).
-
-Leave headroom or patch both paths. Keep `deployment` first on `scale-backend` for SpareReady. Ignore both HPA fields in GitOps — [GitOps](gitops.md).
+First *patched* key on `scale-backend` is SpareReady primary. Prefer scaler-only binds when an HPA/KEDA owns capacity. Ignore patched capacity fields in GitOps — [GitOps](gitops.md).
 
 ## Use KEDA instead of (or with) Deployment/HPA patches
 
@@ -122,14 +162,14 @@ See [KEDA](keda.md): either patch `ScaledObject.spec.minReplicaCount`, or declar
 | Symptom | Check |
 |---|---|
 | No window / no scale | Policy `nodeFilter`? Pod `protected`? Node signal present? `kubectl get egp -o yaml` status |
-| Drain stuck / no spare | Webhook up? `SpareReady`? HPA `maxReplicas` headroom? `maxWindow` / `ForcedCool`? Image pull / scheduling? |
+| Drain stuck / no spare | Webhook up? `SpareReady`? `CapacityApplied`? `maxWindow` / `ForcedCool`? Image pull / scheduling? |
 | Scale thrash with GitOps | Argo/Flux reverting replicas — see [GitOps](gitops.md) |
 | Scale on every cordon | Narrow `nodeFilter`, or omit `NodeCordoned` from an explicit `disruptionSignals` list |
 | Eviction allowed with no spare | Webhook disabled? `failurePolicy: Ignore`? Pod not using Eviction API (`delete`)? |
 | Deferred workloads never scale | `maxConcurrentWindows`; eviction stays denied until a window slot frees |
 | Double reconcile / flapping | `leaderElect: false` with multiple replicas? |
 
-Metrics: see [Metrics](metrics.md). Events on windows/policies: `ScaledUp`, `SpareReady`, `MaxWindowExceeded`, `ScaledBack`.
+Metrics: see [Metrics](metrics.md). Events on windows/policies: `ScaledUp`, `SpareReady`, `ScaleUpFailed`, `MaxWindowExceeded`, `ScaledBack`.
 
 ## Upgrade notes (hold PDB → webhook)
 

@@ -21,7 +21,9 @@ We aim to acknowledge reports within **7 days** and share a remediation plan or 
 
 ## Trust boundary
 
-Eviction Guard is a cluster-scoped operator. It can patch Deployments and HPAs, and (with the default webhook) **deny `pods/eviction`** for opted-in pods until spare capacity is Ready. Treat `EvictionGuardPolicy` create/update as a privileged action; restrict it with RBAC the same way you restrict HPA or ClusterAutoscaler objects.
+Eviction Guard is a cluster-scoped operator. It can patch Deployments and HPAs (and other catalog backends), and (with the default webhook) **deny `pods/eviction`** for opted-in pods until spare capacity is Ready. Treat `EvictionGuardPolicy` create/update as a privileged action; restrict it with RBAC the same way you restrict HPA or ClusterAutoscaler objects. On shared clusters, deny tenant Policy create.
+
+Cross-namespace capacity mutation is **supported and intentional**: a protected Deployment may set `eviction-guard.io/scale-backend` to `key=ns/name` (for example `hpa=platform/web-hpa`) so Eviction Guard patches capacity in another namespace. There is no same-namespace deny in the operator. Isolation is an ops / RBAC concern — who may create Policies, who may annotate Deployments, and how ClusterRole patch rights are scoped. See [docs/configure.md](docs/configure.md).
 
 With `webhook.failurePolicy: Fail` (Helm default), a webhook outage blocks voluntary drains of opted-in pods until the webhook recovers. That is intentional; do not set `Ignore` unless you accept cold drains during outages. See [docs/howto.md](docs/howto.md).
 

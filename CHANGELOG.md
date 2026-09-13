@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Versions follow [SemVer
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-09-13
+
+### Added
+
+- Window condition `CapacityApplied` and metric `evg_capacity_apply_error` when a catalog capacity patch fails (admission/RBAC/conflict/other). Windows still open so eviction stays gated; drains fail-open after `maxWindow` (`ForcedCool`). Spot example sets `maxWindow: 15m`.
+- Scale-up / restore error handling is Kind-agnostic: classify API errors, surface on the Window, and never special-case HPA/KEDA types in the controllers.
+- Catalog entry `skipDownscaling`: raise capacity on disruption but leave integer paths at `ScaledTo` when the window closes (stamps still cleared). Prefer scaler floors (HPA/KEDA); use this mainly on `Deployment` if you still bind it and do not want Eviction Guard to yank replicas back. Examples: `workload-hpa.yaml` (HPA-only bind) and `policy-custom-backend.yaml` (`skipDownscaling` with multi-backend).
+
+### Changed
+
+- Scale-back always reverts each action to its recorded **baseline** (unless `skipDownscaling`). Removed load-aware Held / observed-replicas restore clamps — sticky capacity is an explicit catalog choice, not inferred from Deploy replica count.
+- Helm chart default `replicaCount` is **2** so the validating webhook stays available during rolling upgrades / node drains (`failurePolicy: Fail`). Override with `--set replicaCount=1` for tiny/dev clusters.
+- Chart / image / appVersion bumped to **0.2.2**.
+
+### Removed
+
+- HPA-only `CapacityHeadroom` / `evg_capacity_ceiling` and typed HPA minReplicas restore helpers (`RestoreMinReplicas` / `ScaleDownMinReplicas`).
+- Automatic `Held` phase when Target observed replicas moved past spare (use `skipDownscaling` instead).
+
 ## [0.2.1] — 2026-09-10
 
 ### Changed

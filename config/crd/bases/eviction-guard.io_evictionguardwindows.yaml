@@ -110,6 +110,11 @@ spec:
                         object.
                       format: int32
                       type: integer
+                    skipDownscaling:
+                      description: |-
+                        SkipDownscaling, when true, leaves this field at ScaledTo on scale-back
+                        (copied from the catalog entry when the window opened). Stamps are still cleared.
+                      type: boolean
                     stampKeys:
                       description: StampKeys are annotation keys written onto the
                         scaled object; scale-back deletes them.
@@ -255,7 +260,10 @@ spec:
                 description: Message is a human-readable reason for the current phase.
                 type: string
               phase:
-                description: WindowPhase is the lifecycle of a disruption window.
+                description: |-
+                  WindowPhase is the lifecycle of a disruption window.
+                  Held remains in the enum for compatibility with older Windows; new reconciles
+                  no longer enter Held (use backends[].skipDownscaling for sticky capacity).
                 enum:
                 - Open
                 - Cooling

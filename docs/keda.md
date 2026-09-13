@@ -77,6 +77,13 @@ If the ScaledObject already has a queue (or other) trigger, add EVG as another
 trigger. KEDA takes the **max** across triggers (not a sum) unless you configure
 otherwise — size the EVG target so it can win during disruption.
 
+SpareReady still depends on KEDA (or another controller) raising Ready pods.
+Until then, eviction stays denied — the same as a stuck spare. The hard safety
+valve is still **`maxWindow` → `ForcedCool`** (fail-open); there is no separate
+external-window fail-open path. Tune `maxWindow` for how long you will wait for
+metrics-driven spare (Spot often **10–15m**). Watch `SpareReady`,
+`evg_spare_not_ready`, and window Events if drains stall.
+
 Examples: [`examples/policy-keda-external.yaml`](../examples/policy-keda-external.yaml),
 [`examples/scaledobject-evg-metrics.yaml`](../examples/scaledobject-evg-metrics.yaml).
 

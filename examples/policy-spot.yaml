@@ -13,13 +13,16 @@ spec:
   spareReplicas: 1
   maxBuffer: 4
   maxConcurrentWindows: 8
-  maxWindow: 2h
+  # Fail-open if spare cannot land (e.g. already at HPA maxReplicas). Default is 2h.
+  maxWindow: 15m
   backends:
     deployment:
       apiVersion: apps/v1
       kind: Deployment
       patches:
         - path: spec.replicas
+      # When also binding HPA: prefer scale-backend: hpa alone, or set
+      # skipDownscaling: true so EVG does not yank Deploy replicas on close.
     hpa:
       apiVersion: autoscaling/v1
       kind: HorizontalPodAutoscaler
