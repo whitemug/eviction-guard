@@ -80,7 +80,7 @@ $(GOLANGCI_LINT): | localbin
 
 .PHONY: govulncheck
 govulncheck: ## Scan Go modules for known vulnerabilities
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 .PHONY: build
 build: generate fmt vet ## Build manager binary
