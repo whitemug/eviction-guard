@@ -4,7 +4,7 @@ All notable changes to this project are documented here. Versions follow [SemVer
 
 ## [Unreleased]
 
-## [0.2.3] — 2026-09-15
+## [0.2.3] — 2026-09-16
 
 ### Added
 
@@ -12,7 +12,7 @@ All notable changes to this project are documented here. Versions follow [SemVer
 - Split webhook `failurePolicy` knobs (`evictionFailurePolicy` default `Fail`, `deploymentFailurePolicy` default `Ignore`) with clear docs that eviction Fail is cluster-wide.
 - Helm metrics Service (`metrics.service.enabled`, default **true**) and NetworkPolicy (`networkPolicy.enabled`, default **true** — a port allow-list for the manager's own health/metrics/webhook ports, not a source restriction; safe no-op for existing traffic); `webhook.certManager.enabled` path; chart `NOTES.txt`.
 - Ready probes wait for cache sync (and webhook server when enabled).
-- Release: Trivy scan of a local amd64 image **before** push; SPDX SBOM (syft) attached to the GitHub Release. CI: `helm template | kubeconform`.
+- Release: Trivy scan of a local amd64 image **before** push; SPDX SBOM (syft) attached to the GitHub Release; tag job requires a successful `ci.yaml` run on the tagged SHA and locks Chart / `image.tag` / kustomize `newTag` together. CI: `helm template | kubeconform`.
 - Design inventory for Target abstraction beyond Deployment: [docs/design-targets.md](docs/design-targets.md).
 - Direct unit coverage for the multi-path merge patch (`backends.PatchIntegers`) and for custom-signal annotation/key-value matching (`signals.MatchCustom`).
 

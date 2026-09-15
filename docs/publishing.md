@@ -31,7 +31,7 @@ Artifacts may still be **private** on GHCR even when the git repo is public — 
 
 Example below uses **`v0.2.3`**; for a later cut, substitute the new version everywhere (Chart.yaml, values, kustomize `newTag`, CHANGELOG, tag name).
 
-1. Bump in lockstep with the git tag (the release job fails if Chart.yaml / `image.tag` drift; also keep `config/default/kustomization.yaml` `newTag` aligned manually):
+1. Bump in lockstep with the git tag (the release job fails if Chart.yaml / `image.tag` / kustomize `newTag` drift):
    - `charts/eviction-guard/Chart.yaml` `version` and `appVersion`
    - `charts/eviction-guard/values.yaml` `image.tag`
    - `config/default/kustomization.yaml` `newTag` (keep samples aligned)
@@ -47,6 +47,7 @@ Example below uses **`v0.2.3`**; for a later cut, substitute the new version eve
    - Chart `oci://ghcr.io/whitemug/charts/eviction-guard:0.2.3`
    - A GitHub Release whose body is the matching CHANGELOG section (create-or-update on re-run)
    Both artifacts are signed with Cosign keyless (GitHub OIDC → Sigstore). Helm GPG `.prov` files are not used.
+   The release workflow also refuses to publish unless a successful `ci.yaml` run already exists for the tagged commit.
 3. Compatibility: `v1alpha1` may change; see [UPGRADING.md](../UPGRADING.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ### Pre-tag reminders
