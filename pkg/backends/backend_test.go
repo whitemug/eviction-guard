@@ -215,6 +215,100 @@ func TestCurrentDefaultWhenUnset(t *testing.T) {
 	}
 }
 
+func TestPatchIntegersMultiPath(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "autoscaling/v2",
+		"kind":       "HorizontalPodAutoscaler",
+		"metadata": map[string]interface{}{
+			"name":      "web",
+			"namespace": "app",
+		},
+		"spec": map[string]interface{}{
+			"minReplicas": int64(2),
+			"maxReplicas": int64(10),
+		},
+	}}
+	scheme := runtime.NewScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).Build()
+	base := backends.Target{
+		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
+		APIVersion: "autoscaling/v2",
+		Kind:       "HorizontalPodAutoscaler",
+	}
+	ctx := context.Background()
+
+	// One merge patch raises both fields.
+	if err := backends.PatchIntegers(ctx, c, base, []string{"spec.minReplicas", "spec.maxReplicas"}, map[string]int32{
+		"spec.minReplicas": 5,
+		"spec.maxReplicas": 12,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(obj.GroupVersionKind())
+	if err := c.Get(ctx, base.ObjectKey, got); err != nil {
+		t.Fatal(err)
+	}
+	minV, _, _ := unstructured.NestedInt64(got.Object, "spec", "minReplicas")
+	maxV, _, _ := unstructured.NestedInt64(got.Object, "spec", "maxReplicas")
+	if minV != 5 || maxV != 12 {
+		t.Fatalf("min=%d max=%d, want 5/12", minV, maxV)
+	}
+
+	// Values already matching current: no-op, no error.
+	if err := backends.PatchIntegers(ctx, c, base, []string{"spec.minReplicas", "spec.maxReplicas"}, map[string]int32{
+		"spec.minReplicas": 5,
+		"spec.maxReplicas": 12,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A path present in paths but absent from values is left untouched.
+	if err := backends.PatchIntegers(ctx, c, base, []string{"spec.minReplicas", "spec.maxReplicas"}, map[string]int32{
+		"spec.minReplicas": 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, base.ObjectKey, got); err != nil {
+		t.Fatal(err)
+	}
+	minV, _, _ = unstructured.NestedInt64(got.Object, "spec", "minReplicas")
+	maxV, _, _ = unstructured.NestedInt64(got.Object, "spec", "maxReplicas")
+	if minV != 1 || maxV != 12 {
+		t.Fatalf("min=%d max=%d, want 1/12 (maxReplicas untouched)", minV, maxV)
+	}
+}
+
+func TestPatchIntegersSinglePathIgnoresUnrelatedValues(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	replicas := int32(3)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dep).Build()
+	base := backends.Target{
+		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+	}
+	ctx := context.Background()
+
+	// A single-path call whose values map has no entry for that path must be a
+	// no-op, not a write of the zero value.
+	if err := backends.PatchIntegers(ctx, c, base, []string{"spec.replicas"}, map[string]int32{}); err != nil {
+		t.Fatal(err)
+	}
+	got := &appsv1.Deployment{}
+	if err := c.Get(ctx, base.ObjectKey, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Replicas == nil || *got.Spec.Replicas != 3 {
+		t.Fatalf("replicas=%v, want untouched at 3", got.Spec.Replicas)
+	}
+}
+
 func TestCurrentInt32Bounds(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "example.com/v1",

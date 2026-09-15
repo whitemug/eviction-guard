@@ -99,8 +99,13 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Target Deployment deleted: restore remaining backends (e.g. HPA) and close.
 	// Without this, liveAtRisk/spareCounts treat NotFound as zeros and the window
 	// stays Open waiting for spare until maxWindow.
+	//
+	// dep is fetched once here and threaded through the rest of Reconcile
+	// (liveAtRiskPods, spareCounts, writeStatus, scale-back) instead of each of
+	// them re-Getting the same object. nil for a non-Deployment target.
+	var dep *appsv1.Deployment
 	if k := win.Spec.Target.Kind; k == "" || k == "Deployment" {
-		dep := &appsv1.Deployment{}
+		dep = &appsv1.Deployment{}
 		tErr := r.Get(ctx, types.NamespacedName{
 			Namespace: win.Spec.Target.Namespace, Name: win.Spec.Target.Name,
 		}, dep)
@@ -124,7 +129,7 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.deleteClosedWindow(ctx, win)
 	}
 
-	liveAtRisk, _, err := liveAtRiskPods(ctx, r.Client, win, policy)
+	liveAtRisk, _, err := liveAtRiskPods(ctx, r.Client, win, policy, dep)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -143,7 +148,7 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	safeReady := win.Spec.Baseline
 	if !forceCool && liveAtRisk == 0 {
-		_, safe, err := r.spareCounts(ctx, win)
+		_, safe, err := r.spareCounts(ctx, win, dep)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -166,21 +171,17 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	switch dec.Step {
 	case stepStayOpenVulnerable, stepStayOpenWaitingSpare:
 		if dec.AbortCooldown {
-			if err := r.abortCooldown(ctx, win, policy); err != nil {
+			if err := r.abortCooldown(ctx, win, policy, dep); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-		if err := r.writeStatus(ctx, win, dec.Phase, dec.Message); err != nil {
+		if err := r.writeStatus(ctx, win, dep, dec.Phase, dec.Message); err != nil {
 			return ctrl.Result{}, err
 		}
 		return openRequeue(policy, win, now), nil
 
 	case stepBeginScaleBack:
 		if err := r.scaleBackIfAllowed(ctx, win); err != nil {
-			return ctrl.Result{}, err
-		}
-		dep, err := workloadDeployment(ctx, r.Client, win.Spec.Target.Namespace, win.Spec.Target.Name)
-		if err != nil {
 			return ctrl.Result{}, err
 		}
 		coolUntil := metav1.NewTime(now.Add(scaleBackAfter(policy, dep)))
@@ -193,19 +194,19 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		coolMsg := coolingMessage(forceCool, win.Status.ForcedCool)
-		if err := r.writeStatus(ctx, win, egv1a1.WindowPhaseCooling, coolMsg); err != nil {
+		if err := r.writeStatus(ctx, win, dep, egv1a1.WindowPhaseCooling, coolMsg); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: coolUntil.Sub(now)}, nil
 
 	case stepStayCooling:
-		if err := r.writeStatus(ctx, win, dec.Phase, dec.Message); err != nil {
+		if err := r.writeStatus(ctx, win, dep, dec.Phase, dec.Message); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: until.Sub(now)}, nil
 
 	case stepClose:
-		if err := r.writeStatus(ctx, win, dec.Phase, dec.Message); err != nil {
+		if err := r.writeStatus(ctx, win, dep, dec.Phase, dec.Message); err != nil {
 			return ctrl.Result{}, err
 		}
 		if dec.RetainClosed {
@@ -267,17 +268,13 @@ func (r *WindowReconciler) stillVulnerable(ctx context.Context, win *egv1a1.Evic
 	return still, nil
 }
 
-func (r *WindowReconciler) abortCooldown(ctx context.Context, win *egv1a1.EvictionGuardWindow, policy *egv1a1.EvictionGuardPolicy) error {
+func (r *WindowReconciler) abortCooldown(ctx context.Context, win *egv1a1.EvictionGuardWindow, policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment) error {
 	if win.Spec.WindowUntil == nil {
 		return nil
 	}
 	patch := client.MergeFrom(win.DeepCopy())
 	win.Spec.WindowUntil = nil
 	if err := r.Patch(ctx, win, patch); err != nil {
-		return err
-	}
-	dep, err := workloadDeployment(ctx, r.Client, win.Spec.Target.Namespace, win.Spec.Target.Name)
-	if err != nil {
 		return err
 	}
 	return stampCooldown(ctx, r.Client, policy, dep, win, time.Time{})
@@ -314,8 +311,8 @@ func (r *WindowReconciler) scaleBackAndClose(ctx context.Context, win *egv1a1.Ev
 	return r.scaleBackAndUnfinalize(ctx, win)
 }
 
-func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.EvictionGuardWindow, phase egv1a1.WindowPhase, msg string) error {
-	ready, safe, err := r.spareCounts(ctx, win)
+func (r *WindowReconciler) writeStatus(ctx context.Context, win *egv1a1.EvictionGuardWindow, dep *appsv1.Deployment, phase egv1a1.WindowPhase, msg string) error {
+	ready, safe, err := r.spareCounts(ctx, win, dep)
 	if err != nil {
 		return err
 	}

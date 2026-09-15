@@ -13,13 +13,11 @@ package evictgate
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -56,7 +54,9 @@ type Result struct {
 //   - Node not vulnerable (filter miss / no signal): allow (even if a sibling window is open)
 //   - ForcedCool window: allow (fail-open after maxWindow), including deferred/no-scale windows
 //   - SpareReady: allow only the lexicographically first at-risk pod (one at a time)
-//   - No window yet (brief race before policy opens deferred or scaling window): deny
+//   - No window yet (usually a brief race before the policy opens a deferred or
+//     scaling window, but can persist across reconciles if window creation keeps
+//     erroring — see PolicyReconciler.ensureDeferredWindow/ensureWindow): deny
 //   - Otherwise: deny (waiting for spare, or deferred window still within maxWindow)
 func Evaluate(ctx context.Context, c client.Client, pod *corev1.Pod) (Result, error) {
 	if pod == nil {
@@ -89,7 +89,7 @@ func Evaluate(ctx context.Context, c client.Client, pod *corev1.Pod) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
-	nsLabels, err := namespaceLabelSet(ctx, c, pod.Namespace)
+	nsLabels, err := workload.NamespaceLabels(ctx, c, pod.Namespace)
 	if err != nil {
 		return Result{}, err
 	}
@@ -170,17 +170,6 @@ func listPolicies(ctx context.Context, c client.Client) ([]*egv1a1.EvictionGuard
 	return out, nil
 }
 
-func namespaceLabelSet(ctx context.Context, c client.Client, nsName string) (labels.Set, error) {
-	ns := &corev1.Namespace{}
-	if err := c.Get(ctx, types.NamespacedName{Name: nsName}, ns); err != nil {
-		if apierrors.IsNotFound(err) {
-			return labels.Set{}, nil
-		}
-		return nil, err
-	}
-	return labels.Set(ns.Labels), nil
-}
-
 func activeWindowFor(ctx context.Context, c client.Client, dep *appsv1.Deployment, policy *egv1a1.EvictionGuardPolicy) (*egv1a1.EvictionGuardWindow, error) {
 	if policy == nil {
 		return nil, nil
@@ -215,7 +204,9 @@ func nextAtRiskPod(ctx context.Context, c client.Client, dep *appsv1.Deployment,
 	if err := c.List(ctx, list, client.InNamespace(dep.Namespace), client.MatchingLabelsSelector{Selector: sel}); err != nil {
 		return "", err
 	}
-	var names []string
+	// Single pass for the lexicographic minimum — this runs on every eviction
+	// admission request, so avoid collecting+sorting the full at-risk name list.
+	next := ""
 	for i := range list.Items {
 		p := &list.Items[i]
 		if p.DeletionTimestamp != nil {
@@ -227,11 +218,9 @@ func nextAtRiskPod(ctx context.Context, c client.Client, dep *appsv1.Deployment,
 		if _, ok := vuln[p.Spec.NodeName]; !ok {
 			continue
 		}
-		names = append(names, p.Name)
+		if next == "" || p.Name < next {
+			next = p.Name
+		}
 	}
-	if len(names) == 0 {
-		return "", nil
-	}
-	sort.Strings(names)
-	return names[0], nil
+	return next, nil
 }

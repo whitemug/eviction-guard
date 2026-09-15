@@ -27,7 +27,7 @@ A validating webhook on `pods/eviction` denies eviction of opted-in pods until s
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.2 \
+  --version 0.2.3 \
   --namespace eviction-guard-system --create-namespace
 kubectl apply -f examples/policy-spot.yaml
 kubectl apply -f examples/workload.yaml
@@ -84,7 +84,7 @@ More examples in [`examples/`](examples/README.md). Signal recipes: [docs/signal
 Node signal / cordon
         │
         ▼
-EvictionGuardPolicy (nodeFilter) → scale spare → EvictionGuardWindow
+EvictionGuardPolicy (nodeFilter) → open/patch EvictionGuardWindow → scale spare
         │
         ▼
 pods/eviction webhook: deny until SpareReady → allow one at-risk pod
@@ -123,7 +123,7 @@ See [docs/extension.md](docs/extension.md). Building from source needs **Go 1.27
 
 ## Status
 
-v1alpha1 (`0.2.2`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md).
+v1alpha1 (`0.2.3`). Migration: [UPGRADING.md](UPGRADING.md). Design: [docs/design.md](docs/design.md).
 
 ## Community
 

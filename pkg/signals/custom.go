@@ -35,29 +35,13 @@ func MatchCustom(node *corev1.Node, signals []egv1a1.CustomDisruptionSignal) boo
 }
 
 func customMatches(node *corev1.Node, sig *egv1a1.CustomDisruptionSignal) bool {
-	if sig.Taint != nil && taintMatch(node, *sig.Taint) {
+	if sig.Taint != nil && sig.Taint.MatchesAny(node.Spec.Taints) {
 		return true
 	}
 	if sig.Annotation != nil && kvMatch(node.Annotations, sig.Annotation) {
 		return true
 	}
 	if sig.Label != nil && kvMatch(node.Labels, sig.Label) {
-		return true
-	}
-	return false
-}
-
-func taintMatch(node *corev1.Node, want egv1a1.TaintMatch) bool {
-	for _, t := range node.Spec.Taints {
-		if t.Key != want.Key {
-			continue
-		}
-		if want.Value != "" && t.Value != want.Value {
-			continue
-		}
-		if want.Effect != "" && t.Effect != want.Effect {
-			continue
-		}
 		return true
 	}
 	return false

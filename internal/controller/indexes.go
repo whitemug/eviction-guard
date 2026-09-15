@@ -31,6 +31,11 @@ const (
 	IndexWindowVulnerableNode = "spec.vulnerableNodes"
 )
 
+// The sync.Once guards below are process-global: they assume exactly one
+// ctrl.Manager (and one cache) per process, which holds for main.go and the
+// envtest suite. A second manager created in the same process would silently
+// skip index registration on its own cache and its MatchingFields lists would
+// then fail or come back empty.
 var (
 	podIndexesOnce    sync.Once
 	podIndexesErr     error

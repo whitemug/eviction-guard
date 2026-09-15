@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/whitemug/eviction-guard
-  tag: "0.2.2"
+  tag: "0.2.3"
   pullPolicy: IfNotPresent
 
 # Default two replicas so the eviction webhook stays available during a rolling
@@ -72,9 +72,13 @@ metrics:
   service:
     enabled: true
 
-# When true, restrict ingress to health, metrics, and webhook ports only.
+# Default-deny ingress except the manager's own health, metrics, and webhook
+# ports (no "from" restriction — a pure port allow-list, so this is a no-op
+# for any traffic that already worked and only closes off accidental extra
+# exposure). Safe to leave on; disable only if your CNI does not enforce
+# NetworkPolicy well or you have added another port that needs ingress.
 networkPolicy:
-  enabled: false
+  enabled: true
 
 healthProbe:
   bindAddress: ":8081"

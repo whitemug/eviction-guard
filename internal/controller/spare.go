@@ -42,14 +42,11 @@ func listWorkloadPods(ctx context.Context, c client.Reader, dep *appsv1.Deployme
 }
 
 // spareCounts returns Ready pods and Ready pods not sitting on vulnerable nodes.
-func (r *WindowReconciler) spareCounts(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ready, safe int32, err error) {
-	if k := win.Spec.Target.Kind; k != "" && k != "Deployment" {
+// dep is the already-fetched target Deployment for this reconcile (nil for a
+// non-Deployment target or a target that no longer exists).
+func (r *WindowReconciler) spareCounts(ctx context.Context, win *egv1a1.EvictionGuardWindow, dep *appsv1.Deployment) (ready, safe int32, err error) {
+	if dep == nil {
 		return 0, 0, nil
-	}
-	dep := &appsv1.Deployment{}
-	key := types.NamespacedName{Namespace: win.Spec.Target.Namespace, Name: win.Spec.Target.Name}
-	if err := r.Get(ctx, key, dep); err != nil {
-		return 0, 0, client.IgnoreNotFound(err)
 	}
 	sel, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
 	if err != nil {
@@ -78,25 +75,18 @@ func (r *WindowReconciler) spareCounts(ctx context.Context, win *egv1a1.Eviction
 
 // liveAtRiskPods counts non-terminating target pods on nodes that currently
 // match the policy filter and carry a disruption signal. It does not depend on
-// Spec.VulnerableNodes.
+// Spec.VulnerableNodes. dep is the already-fetched target Deployment for this
+// reconcile (nil for a non-Deployment target or a target that no longer exists).
 //
 // Cost is O(workload pods + unique node Gets), not a cluster-wide Node list:
 // only nodes that already host this workload can contribute at-risk pods.
-func liveAtRiskPods(ctx context.Context, c client.Reader, win *egv1a1.EvictionGuardWindow, policy *egv1a1.EvictionGuardPolicy) (int, []string, error) {
-	if win == nil || policy == nil {
-		return 0, nil, nil
-	}
-	if k := win.Spec.Target.Kind; k != "" && k != "Deployment" {
+func liveAtRiskPods(ctx context.Context, c client.Reader, win *egv1a1.EvictionGuardWindow, policy *egv1a1.EvictionGuardPolicy, dep *appsv1.Deployment) (int, []string, error) {
+	if win == nil || policy == nil || dep == nil {
 		return 0, nil, nil
 	}
 	filter, err := filters.FromSpec(policy.Spec.NodeFilter)
 	if err != nil {
 		return 0, nil, err
-	}
-	dep := &appsv1.Deployment{}
-	key := types.NamespacedName{Namespace: win.Spec.Target.Namespace, Name: win.Spec.Target.Name}
-	if err := c.Get(ctx, key, dep); err != nil {
-		return 0, nil, client.IgnoreNotFound(err)
 	}
 	pods, err := listWorkloadPods(ctx, c, dep)
 	if err != nil {

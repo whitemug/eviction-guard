@@ -329,6 +329,84 @@ func TestApplyCompensatesPartialFailure(t *testing.T) {
 	}
 }
 
+// TestCompensateApplyDoesNotDisturbUntouchedGroupMember guards against a
+// regression where restoreApplyGroup (used by compensateApply on a mid-fan-out
+// failure) wrote every group member's baseline unconditionally, instead of only
+// the entries this apply() call actually raised. If a group member's baseline
+// is stale (e.g. recomputed from an existing action under concurrent
+// modification) and higher than its live value, the old code would patch that
+// field *up* to the stale baseline during what is supposed to be a rollback.
+func TestCompensateApplyDoesNotDisturbUntouchedGroupMember(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(3))},
+	}
+	hpa := &autoscalingv1.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
+			MinReplicas: ptr.To(int32(2)),
+			MaxReplicas: 1,
+			ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+				Kind: "Deployment", Name: "web", APIVersion: "apps/v1",
+			},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{}).
+		WithObjects(dep, hpa).Build()
+	c := &failSecondObjectClient{Client: base, failKind: "Deployment"}
+
+	plan := &scalePlan{
+		desired: 5,
+		steps: []scaleStep{
+			{
+				key: "hpa-min",
+				target: backends.Target{
+					ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
+					APIVersion: "autoscaling/v1", Kind: "HorizontalPodAutoscaler", FieldPath: "spec.minReplicas",
+				},
+				baseline: 2, desired: 5,
+			},
+			{
+				key: "hpa-max",
+				target: backends.Target{
+					ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
+					APIVersion: "autoscaling/v1", Kind: "HorizontalPodAutoscaler", FieldPath: "spec.maxReplicas",
+				},
+				// Stale baseline (e.g. from an existing action) above the live
+				// value; this apply() call never raises it (current already
+				// meets desired), so compensation must not touch it.
+				baseline: 8, desired: 1,
+			},
+			{
+				key: "deployment",
+				target: backends.Target{
+					ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
+					APIVersion: "apps/v1", Kind: "Deployment", FieldPath: "spec.replicas",
+				},
+				baseline: 3, desired: 5,
+			},
+		},
+	}
+	if _, err := plan.apply(context.Background(), c, "spot"); err == nil {
+		t.Fatal("expected apply error from Deployment patch failure")
+	}
+	got := &autoscalingv1.HorizontalPodAutoscaler{}
+	if err := base.Get(context.Background(), client.ObjectKey{Namespace: "app", Name: "web"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.MinReplicas == nil || *got.Spec.MinReplicas != 2 {
+		t.Fatalf("minReplicas=%v, want compensated baseline 2", got.Spec.MinReplicas)
+	}
+	if got.Spec.MaxReplicas != 1 {
+		t.Fatalf("maxReplicas=%d, want untouched at 1 (never raised, must not be bumped to stale baseline 8)", got.Spec.MaxReplicas)
+	}
+}
+
 // failSecondObjectClient fails Patch on the named kind (backends patch unstructured).
 type failSecondObjectClient struct {
 	client.Client

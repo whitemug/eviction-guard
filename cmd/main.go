@@ -131,18 +131,6 @@ func main() {
 		setupLog.Error(err, "unable to set up cache ready check")
 		os.Exit(1)
 	}
-	if webhookEnabled {
-		if err := mgr.AddReadyzCheck("webhook", func(_ *http.Request) error {
-			if mgr.GetWebhookServer() == nil {
-				return fmt.Errorf("webhook server not configured")
-			}
-			return nil
-		}); err != nil {
-			setupLog.Error(err, "unable to set up webhook ready check")
-			os.Exit(1)
-		}
-	}
-
 	setupLog.Info("starting eviction-guard manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")

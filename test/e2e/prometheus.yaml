@@ -1,17 +1,12 @@
 # Minimal Prometheus for Recipe B e2e (scrapes EVG manager metrics).
-apiVersion: v1
-kind: Service
-metadata:
-  name: eviction-guard-metrics
-  namespace: eviction-guard-system
-spec:
-  selector:
-    control-plane: controller-manager
-  ports:
-    - name: metrics
-      port: 8080
-      targetPort: 8080
----
+#
+# No Service for the manager's metrics port here: the chart creates
+# eviction-guard-metrics in eviction-guard-system itself by default
+# (metrics.service.enabled: true). Applying our own Service of the same
+# name/namespace before `helm upgrade --install` runs makes Helm refuse to
+# adopt it ("exists and cannot be imported into the current release"),
+# failing the install. Prometheus's static target below just needs that
+# Service to exist by scrape time, which it does once the chart installs.
 apiVersion: v1
 kind: ConfigMap
 metadata:

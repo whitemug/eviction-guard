@@ -110,29 +110,13 @@ func (s *specFilter) Matches(node *corev1.Node) (bool, error) {
 
 	if len(s.spec.TaintSelector) > 0 {
 		for _, want := range s.spec.TaintSelector {
-			if !taintMatches(node.Spec.Taints, want) {
+			if !want.MatchesAny(node.Spec.Taints) {
 				return false, nil
 			}
 		}
 	}
 
 	return true, nil
-}
-
-func taintMatches(taints []corev1.Taint, want egv1a1.TaintMatch) bool {
-	for _, t := range taints {
-		if t.Key != want.Key {
-			continue
-		}
-		if want.Value != "" && t.Value != want.Value {
-			continue
-		}
-		if want.Effect != "" && t.Effect != want.Effect {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func contains(list []string, v string) bool {
