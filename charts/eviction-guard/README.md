@@ -30,7 +30,7 @@ Requires Kubernetes **1.27+**. The chart does not create a policy by default; ap
 | `webhook.certManager.enabled` | `false` | Use cert-manager Issuer+Certificate + CA inject instead of Helm genCA |
 | `metrics.service.enabled` | `true` | ClusterIP Service on the metrics port for scrape DX |
 | `networkPolicy.enabled` | `true` | Deny ingress to any port but health / metrics / webhook (port allow-list only, not source-restricted) |
-| `metrics.bindAddress` | `:8080` | Plaintext, unauthenticated — enable NetworkPolicy if needed |
+| `metrics.bindAddress` | `:8080` | Plaintext, unauthenticated — NetworkPolicy (default on) is port-only; restrict scrape sources yourself on multi-tenant clusters |
 | `defaultPolicy.enabled` | `false` | Bare install does not watch the whole cluster |
 | `extraClusterRoleRules` | `[]` | Required for custom catalog backends that EVG patches (app CRs, KEDA Recipe A, …) |
 
