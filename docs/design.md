@@ -22,7 +22,7 @@ Operator docs: [Overview](overview.md), [Configure](configure.md), [How-to](howt
    Karpenter / cloud / cordon
             │  node markers (early)
             ▼
-   Policy controller ──► scale backends ──► EvictionGuardWindow
+   Policy controller ──► EvictionGuardWindow ──► scale backends
             │
             ▼
    drain uses pods/eviction
@@ -43,6 +43,8 @@ Operator docs: [Overview](overview.md), [Configure](configure.md), [How-to](howt
 | Eviction webhook | Hard gate for voluntary Eviction |
 
 Signals **buy Ready time**. The webhook **sequences** drain. `protected` is membership only.
+
+The Window is created/patched **before** the capacity backends are mutated: a failed Create leaves no orphaned scale-up with no `maxWindow` clock, and a failed backend patch after that still has a Window to record `CapacityApplied=False` on and fail-open from.
 
 Empty `disruptionSignals` defaults include Karpenter markers, `OutOfService`, and `NodeCordoned`. See [signals](signals.md).
 
@@ -100,7 +102,7 @@ A standing PDB on opt-in labels blocked drains the controller never intended to 
 
 ## Out of scope for v1alpha1
 
-- StatefulSet / non-Deployment primary workloads — Target abstraction planned before API freeze (see **D2** below)  
+- StatefulSet / non-Deployment primary workloads — Target abstraction planned before API freeze (see **D2** and [design-targets.md](design-targets.md))  
 - Treating price-driven consolidation identically to capacity-preserving disruption without operator policy  
 
 Status: shipped in `cmd/main.go`, `internal/controller`, `internal/webhook`, `pkg/evictgate`, Helm + Kustomize.
@@ -112,7 +114,7 @@ Accepted product law for the current design cut:
 | ID | Decision |
 |---|---|
 | D1 | Cross-namespace `scale-backend` (`key=ns/name`) stays supported; isolation is Policy/RBAC/ops, not a code deny |
-| D2 | Plan a Target abstraction (membership / SpareReady / gate beyond Deployment) before API freeze |
+| D2 | Plan a Target abstraction (membership / SpareReady / gate beyond Deployment) before API freeze — inventory + sketch in [design-targets.md](design-targets.md) |
 | D3 | On `CapacityApplied=False`, keep deny until SpareReady or `maxWindow` ForcedCool (retry transient API failures; no early fail-open) |
 | D4 | Cluster-singleton install now; do not freeze APIs/RBAC in a way that blocks future namespace-scoped installs |
 | D5 | Chart default manager `replicaCount: 2` (webhook HA), overridable |
@@ -121,10 +123,7 @@ Accepted product law for the current design cut:
 
 Catalog / scale-backend rationale (locked for 0.2.0): [Scale targets](design-scale-targets.md).
 
-### Maintainer backlog (next)
+### Maintainer backlog
 
-1. Target abstraction: inventory Deployment-hardcoded call sites; design membership / SpareReady / gate beyond Deployment before API freeze.  
-2. Applied-vs-planned actions on partial multi-backend apply failure.  
-3. Catalog `defaultWhenUnset` (or similar) instead of hard-coded `1`.  
-4. Window indexing / watch fan-out; chart metrics NetworkPolicy.  
-5. E2E: CapacityApplied → ForcedCool; multi-policy pin; cross-ns backend happy path.  
+1. Target abstraction beyond Deployment — call-site inventory and sketch in [design-targets.md](design-targets.md) (D2); implement before API freeze.  
+2. Broader envtest/kind coverage for cross-ns backends and multi-policy pin edge cases as the Target work proceeds.  

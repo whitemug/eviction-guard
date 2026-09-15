@@ -1,3 +1,16 @@
+{{- define "eviction-guard.webhookFailurePolicy" -}}
+{{- /* Usage: include "eviction-guard.webhookFailurePolicy" (dict "root" . "specific" .Values.webhook.evictionFailurePolicy) */ -}}
+{{- $specific := .specific -}}
+{{- $legacy := .root.Values.webhook.failurePolicy -}}
+{{- if and $specific (ne $specific "") }}
+{{- $specific }}
+{{- else if and $legacy (ne $legacy "") }}
+{{- $legacy }}
+{{- else }}
+{{- .default }}
+{{- end }}
+{{- end }}
+
 {{- define "eviction-guard.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}

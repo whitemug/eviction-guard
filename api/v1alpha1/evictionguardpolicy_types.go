@@ -43,6 +43,24 @@ type TaintMatch struct {
 	Effect corev1.TaintEffect `json:"effect,omitempty"`
 }
 
+// MatchesAny reports whether any taint in the list satisfies this match (Key
+// required, Value/Effect optional additional constraints).
+func (t TaintMatch) MatchesAny(taints []corev1.Taint) bool {
+	for _, tt := range taints {
+		if tt.Key != t.Key {
+			continue
+		}
+		if t.Value != "" && tt.Value != t.Value {
+			continue
+		}
+		if t.Effect != "" && tt.Effect != t.Effect {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // KeyValueMatch matches a node label or annotation. Key is required.
 // If Value is empty, presence of the key is enough.
 type KeyValueMatch struct {
@@ -167,6 +185,11 @@ type BackendCatalogEntry struct {
 	// workload; use this mainly on Deployment if you still bind it for spare
 	// and do not want Eviction Guard to yank replicas back.
 	SkipDownscaling bool `json:"skipDownscaling,omitempty"`
+
+	// DefaultWhenUnset is the integer Current returns when the path is absent on
+	// the object. When unset: Deployment and HorizontalPodAutoscaler default to 1;
+	// other kinds require this field or Current errors.
+	DefaultWhenUnset *int32 `json:"defaultWhenUnset,omitempty"`
 }
 
 // EvictionGuardPolicySpec defines the desired state of EvictionGuardPolicy.
@@ -189,12 +212,15 @@ type EvictionGuardPolicySpec struct {
 	SpareReplicas *int32 `json:"spareReplicas,omitempty"`
 
 	// MaxBuffer caps how many extra replicas a single scale-up may add. Defaults to 4.
+	// Set explicitly to 0 for unlimited (same pattern as maxWindow / maxConcurrentWindows);
+	// that is not “add zero extras”.
 	// +kubebuilder:validation:Minimum=0
 	MaxBuffer *int32 `json:"maxBuffer,omitempty"`
 
-	// MaxConcurrentWindows caps how many Open/Cooling/Held EvictionGuardWindows this
-	// policy may hold at once. At-risk workloads without a window wait until one
-	// closes (scale-back finished). Defaults to 8. Set 0 for unlimited.
+	// MaxConcurrentWindows caps how many scaling Open/Cooling/Held EvictionGuardWindows
+	// this policy may hold at once (deferred/no-scale windows are excluded). Extra
+	// at-risk workloads get a deferred Window that arms maxWindow/ForcedCool without
+	// capacity patches until a scaling slot frees. Defaults to 8. Set 0 for unlimited.
 	// +kubebuilder:validation:Minimum=0
 	MaxConcurrentWindows *int32 `json:"maxConcurrentWindows,omitempty"`
 
@@ -247,11 +273,13 @@ type EvictionGuardPolicyStatus struct {
 	// VulnerableNodes is how many matched nodes currently carry a disruption signal.
 	VulnerableNodes int32 `json:"vulnerableNodes,omitempty"`
 
-	// ActiveWindows is how many Open/Cooling/Held EvictionGuardWindows this policy owns.
+	// ActiveWindows is how many scaling Open/Cooling/Held EvictionGuardWindows this
+	// policy owns (deferred/no-scale windows are not counted here).
 	ActiveWindows int32 `json:"activeWindows,omitempty"`
 
-	// DeferredWorkloads is how many at-risk opted-in Deployments are waiting
-	// for a window slot because MaxConcurrentWindows is already reached.
+	// DeferredWorkloads is how many at-risk opted-in Deployments are waiting for a
+	// scaling slot because MaxConcurrentWindows is already reached. Each still has
+	// a deferred Window so eviction fail-opens after maxWindow (ForcedCool).
 	DeferredWorkloads int32 `json:"deferredWorkloads,omitempty"`
 
 	// Conditions include Ready and BackendsAuthorized (False when a catalog
@@ -318,6 +346,7 @@ func (p *EvictionGuardPolicy) MaxBufferOrDefault() int32 {
 	if p.Spec.MaxBuffer == nil {
 		return DefaultMaxBuffer
 	}
+	// Explicit 0 means unlimited (cap disabled in capacity.TargetReplicas).
 	return *p.Spec.MaxBuffer
 }
 

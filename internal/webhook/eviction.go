@@ -37,10 +37,14 @@ type evictionValidator struct {
 func (v *evictionValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	ev := &policyv1.Eviction{}
 	if err := v.decoder.Decode(req, ev); err != nil {
-		// Some clients send only Request kind/name; fall back to request metadata.
-		if req.Name == "" || req.Namespace == "" {
+		// Only fall back when the admission Object body is empty — some drain
+		// clients set request name/namespace but omit Object.raw. A non-empty
+		// body that fails to decode is a real bug; do not mask it.
+		if len(req.Object.Raw) > 0 || req.Name == "" || req.Namespace == "" {
 			return admission.Errored(http.StatusBadRequest, err)
 		}
+		ctrl.Log.WithName("eviction-webhook").Error(err, "decode failed with empty object; using request metadata",
+			"name", req.Name, "namespace", req.Namespace)
 		ev.Name = req.Name
 		ev.Namespace = req.Namespace
 	}
@@ -76,6 +80,7 @@ func (v *evictionValidator) Handle(ctx context.Context, req admission.Request) a
 }
 
 // registerEviction adds the pods/eviction validating handler.
+// Uses mgr.GetClient() so Evaluate Lists/Gets hit the informer cache (not a live apiserver fan-out).
 func registerEviction(mgr ctrl.Manager, dec admission.Decoder) {
 	mgr.GetWebhookServer().Register(EvictionPath, &webhook.Admission{
 		Handler: &evictionValidator{client: mgr.GetClient(), decoder: dec},

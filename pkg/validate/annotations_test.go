@@ -10,6 +10,9 @@ package validate_test
 import (
 	"strings"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/validate"
@@ -154,6 +157,51 @@ func TestPolicyBackends(t *testing.T) {
 		Patches:    []egv1a1.BackendPatch{{}},
 	}
 	if err := validate.Policy(p); err == nil || !strings.Contains(err.Error(), "path or annotation") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestPolicySelectorsDurationsPaths(t *testing.T) {
+	p := &egv1a1.EvictionGuardPolicy{Spec: egv1a1.EvictionGuardPolicySpec{
+		Backends: catalogBackends(),
+		NodeFilter: egv1a1.NodeFilter{
+			LabelSelector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key: "pool", Operator: "NotARealOperator", Values: []string{"x"},
+				}},
+			},
+		},
+	}}
+	if err := validate.Policy(p); err == nil || !strings.Contains(err.Error(), "labelSelector") {
+		t.Fatalf("err=%v", err)
+	}
+
+	p = &egv1a1.EvictionGuardPolicy{Spec: egv1a1.EvictionGuardPolicySpec{
+		Backends:       catalogBackends(),
+		ScaleBackAfter: &metav1.Duration{Duration: -time.Minute},
+	}}
+	if err := validate.Policy(p); err == nil || !strings.Contains(err.Error(), "scaleBackAfter") {
+		t.Fatalf("err=%v", err)
+	}
+
+	p = &egv1a1.EvictionGuardPolicy{Spec: egv1a1.EvictionGuardPolicySpec{
+		Backends:  catalogBackends(),
+		MaxWindow: &metav1.Duration{Duration: -time.Hour},
+	}}
+	if err := validate.Policy(p); err == nil || !strings.Contains(err.Error(), "maxWindow") {
+		t.Fatalf("err=%v", err)
+	}
+
+	p = &egv1a1.EvictionGuardPolicy{Spec: egv1a1.EvictionGuardPolicySpec{
+		Backends: map[string]egv1a1.BackendCatalogEntry{
+			"deployment": {
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Patches:    []egv1a1.BackendPatch{{Path: ".spec..replicas"}},
+			},
+		},
+	}}
+	if err := validate.Policy(p); err == nil || !strings.Contains(err.Error(), "path") {
 		t.Fatalf("err=%v", err)
 	}
 }

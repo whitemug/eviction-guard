@@ -3,12 +3,15 @@
 {{- $ns := .Release.Namespace }}
 {{- $svc := include "eviction-guard.webhookServiceName" . }}
 {{- $secretName := include "eviction-guard.webhookSecretName" . }}
+{{- $certManager := .Values.webhook.certManager.enabled }}
+{{- $caCrt := "" }}
+{{- if not $certManager }}
 {{- $ca := genCA (printf "%s-ca" $fullname) (int .Values.webhook.certDurationDays) }}
 {{- $altNames := list (printf "%s.%s.svc" $svc $ns) (printf "%s.%s.svc.cluster.local" $svc $ns) }}
 {{- $cert := genSignedCert $svc nil $altNames (int .Values.webhook.certDurationDays) $ca }}
 {{- $tlsCrt := $cert.Cert | b64enc }}
 {{- $tlsKey := $cert.Key | b64enc }}
-{{- $caCrt := $ca.Cert | b64enc }}
+{{- $caCrt = $ca.Cert | b64enc }}
 {{- $existing := lookup "v1" "Secret" $ns $secretName }}
 {{- if and $existing $existing.data }}
 {{- $tlsCrt = index $existing.data "tls.crt" }}
@@ -27,6 +30,33 @@ data:
   tls.key: {{ $tlsKey }}
   ca.crt: {{ $caCrt }}
 ---
+{{- end }}
+{{- if $certManager }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $fullname }}-selfsigned
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-webhook
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $secretName }}
+  dnsNames:
+    - {{ printf "%s.%s.svc" $svc $ns }}
+    - {{ printf "%s.%s.svc.cluster.local" $svc $ns }}
+  issuerRef:
+    kind: Issuer
+    name: {{ $fullname }}-selfsigned
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -49,17 +79,23 @@ metadata:
   name: {{ $fullname }}
   labels:
     {{- include "eviction-guard.labels" . | nindent 4 }}
+  {{- if $certManager }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-webhook" $ns $fullname }}
+  {{- end }}
 webhooks:
   - name: vdeployment.eviction-guard.io
     admissionReviewVersions: ["v1"]
     clientConfig:
+      {{- if not $certManager }}
       caBundle: {{ $caCrt }}
+      {{- end }}
       service:
         name: {{ $svc }}
         namespace: {{ $ns }}
         path: /validate-apps-v1-deployment
         port: 443
-    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    failurePolicy: {{ include "eviction-guard.webhookFailurePolicy" (dict "root" . "specific" .Values.webhook.deploymentFailurePolicy "default" "Ignore") }}
     matchPolicy: Equivalent
     sideEffects: None
     timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
@@ -72,13 +108,15 @@ webhooks:
   - name: vegp.eviction-guard.io
     admissionReviewVersions: ["v1"]
     clientConfig:
+      {{- if not $certManager }}
       caBundle: {{ $caCrt }}
+      {{- end }}
       service:
         name: {{ $svc }}
         namespace: {{ $ns }}
         path: /validate-eviction-guard-io-v1alpha1-evictionguardpolicy
         port: 443
-    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    failurePolicy: {{ include "eviction-guard.webhookFailurePolicy" (dict "root" . "specific" .Values.webhook.policyFailurePolicy "default" "Fail") }}
     matchPolicy: Equivalent
     sideEffects: None
     timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
@@ -91,13 +129,15 @@ webhooks:
   - name: veviction.eviction-guard.io
     admissionReviewVersions: ["v1"]
     clientConfig:
+      {{- if not $certManager }}
       caBundle: {{ $caCrt }}
+      {{- end }}
       service:
         name: {{ $svc }}
         namespace: {{ $ns }}
         path: /validate-core-v1-eviction
         port: 443
-    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    failurePolicy: {{ include "eviction-guard.webhookFailurePolicy" (dict "root" . "specific" .Values.webhook.evictionFailurePolicy "default" "Fail") }}
     matchPolicy: Equivalent
     sideEffects: None
     timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}

@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -33,8 +34,39 @@ func (b *fieldBackend) Current(ctx context.Context, c client.Client, t Target) (
 		return 0, err
 	}
 	if !ok {
+		return defaultWhenPathUnset(t)
+	}
+	return int64ToInt32(v, t)
+}
+
+func defaultWhenPathUnset(t Target) (int32, error) {
+	if t.DefaultWhenUnset != nil {
+		return *t.DefaultWhenUnset, nil
+	}
+	if knownDefaultOne(t.APIVersion, t.Kind) {
 		// Deployment.spec.replicas and HPA.spec.minReplicas default to 1 when unset.
 		return 1, nil
+	}
+	return 0, fmt.Errorf(
+		"%s %s path %q unset: set backends[].defaultWhenUnset (known Deployment/HPA default to 1)",
+		t.Kind, t.ObjectKey, t.FieldPath,
+	)
+}
+
+func knownDefaultOne(apiVersion, kind string) bool {
+	switch kind {
+	case "Deployment":
+		return apiVersion == "apps/v1"
+	case "HorizontalPodAutoscaler":
+		return apiVersion == "autoscaling/v1" || apiVersion == "autoscaling/v2"
+	default:
+		return false
+	}
+}
+
+func int64ToInt32(v int64, t Target) (int32, error) {
+	if v < math.MinInt32 || v > math.MaxInt32 {
+		return 0, fmt.Errorf("%s %s path %q value %d out of int32 range", t.Kind, t.ObjectKey, t.FieldPath, v)
 	}
 	return int32(v), nil
 }
@@ -47,14 +79,13 @@ func (b *fieldBackend) ScaleDown(ctx context.Context, c client.Client, t Target,
 	return b.patch(ctx, c, t, baseline)
 }
 
+// PatchIntegers applies one or more integer field values to base as a single
+// merge patch. A path with no entry in values is left untouched — callers
+// (plan.go) rely on this to patch only the paths in a same-object group that
+// actually need to change.
 func (b *fieldBackend) PatchIntegers(ctx context.Context, c client.Client, base Target, paths []string, values map[string]int32) error {
 	if len(paths) == 0 {
 		return nil
-	}
-	if len(paths) == 1 {
-		t := base
-		t.FieldPath = paths[0]
-		return b.patch(ctx, c, t, values[paths[0]])
 	}
 	obj, _, err := b.get(ctx, c, base)
 	if err != nil {

@@ -1,2 +1,8 @@
+# Tooling pins for local DX. CI installs helm/kind/kubectl via GitHub Actions;
+# these entries are optional helpers when using `mise install` on a laptop.
 [tools]
 go = "1.27.1"
+# Optional: uncomment to pin chart/e2e CLIs locally (versions match CI where noted).
+# helm = "3.17.3"          # azure/setup-helm in .github/workflows/ci.yaml
+# kind = "0.27.0"          # or use helm/kind-action install_only
+# kubectl = "1.32.0"

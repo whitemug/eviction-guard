@@ -34,6 +34,13 @@ jobs:
           govulncheck ./...
       - name: Helm lint
         run: make helm-lint
+      - name: Helm kubeconform
+        run: |
+          set -euo pipefail
+          KUBECONFORM_VERSION=v0.6.7
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C /tmp kubeconform
+          make helm-kubeconform KUBECONFORM=/tmp/kubeconform
       - name: Test
         run: make test
       - name: Envtest

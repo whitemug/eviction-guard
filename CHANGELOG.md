@@ -4,6 +4,50 @@ All notable changes to this project are documented here. Versions follow [SemVer
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-09-15
+
+### Added
+
+- Deferred disruption windows when `maxConcurrentWindows` is hit: lightweight no-scale windows that still arm `maxWindow` / `ForcedCool` so drains fail-open instead of denying forever without a clock.
+- Split webhook `failurePolicy` knobs (`evictionFailurePolicy` default `Fail`, `deploymentFailurePolicy` default `Ignore`) with clear docs that eviction Fail is cluster-wide.
+- Helm metrics Service (`metrics.service.enabled`, default **true**) and NetworkPolicy (`networkPolicy.enabled`, default **true** — a port allow-list for the manager's own health/metrics/webhook ports, not a source restriction; safe no-op for existing traffic); `webhook.certManager.enabled` path; chart `NOTES.txt`.
+- Ready probes wait for cache sync (and webhook server when enabled).
+- Release: Trivy scan of a local amd64 image **before** push; SPDX SBOM (syft) attached to the GitHub Release. CI: `helm template | kubeconform`.
+- Design inventory for Target abstraction beyond Deployment: [docs/design-targets.md](docs/design-targets.md).
+- Direct unit coverage for the multi-path merge patch (`backends.PatchIntegers`) and for custom-signal annotation/key-value matching (`signals.MatchCustom`).
+
+### Changed
+
+- Window create / patch happens **before** capacity scale-up (avoids orphaned replicas with no window / ForcedCool clock).
+- Shared `pkg/workload.OwnerDeployment` for policy controller and eviction gate.
+- `scaleBackAndClose` no longer double-calls restore (single restore via `scaleBackAndUnfinalize`).
+- Eviction webhook falls back to request metadata only when `Object.raw` is empty; logs the original decode error.
+- Signals registry uses `sync.RWMutex`; `IsActive` empty-phase behavior documented in API godoc.
+- Makefile `test-unit` skips generate/manifests for a faster local loop.
+- Window reconcile fetches the target Deployment once and threads it through spare/at-risk counting and scale-back instead of re-`Get`ting it up to four times per reconcile.
+- `buildPlan` skips its `Current` read when an existing action already records a baseline (only needed on first activation).
+- Eviction admission's next-at-risk-pod lookup tracks the minimum in one pass instead of collecting and sorting all at-risk pod names.
+- Taint matching (`nodeFilter.taintSelector` and `customSignals.taint`) shares one `TaintMatch.MatchesAny` implementation instead of two copies.
+- `pkg/backends.PatchIntegers` drops its single-path special case; the general merge-patch path (already required for multi-path groups) now handles single-path calls too, so there is one code path instead of two.
+- `compensateApply`'s per-group restore (`internal/controller/plan.go`) now converts to `egv1a1.ScaleAction` and delegates to the same `restoreOneAction` / `restoreGroupedActions` window-close restore already uses, instead of a third, separately-maintained implementation of "walk a group, build paths/values, patch."
+- `collectWorkloads` resolves policy ownership (`policyown.Owns`, which walks every policy and recompiles both selectors) once per Deployment instead of once per at-risk pod.
+- Namespace-label lookup unified as `pkg/workload.NamespaceLabels`; the policy controller wraps it with its per-reconcile cache, the eviction gate calls it directly (removing a second, uncached copy of the same Get-and-convert logic).
+- Removed the manager's `webhook` readyz check: it only asserted `mgr.GetWebhookServer() != nil`, which is set synchronously before the manager is even constructed and so could never fail. The `cache` readyz check is the one doing real work.
+- Renamed a local `cap` variable in the policy controller (it shadowed the builtin, though nothing here called `cap()`).
+
+### Fixed
+
+- Indexed pod list errors no longer fall back to cluster-wide Pod lists.
+- RBAC grants `events.k8s.io` Events for controller-runtime 0.25 recorders.
+- E2E pins `replicaCount=1` with `leaderElect=false`.
+- `--webhook-enabled=true` requires `--webhook-cert-dir` (fail-fast).
+- Helm CRD upgrade steps documented (`UPGRADING.md` / install).
+- Kustomize manager defaults aligned to 2 replicas + PDB.
+- Mid-fan-out scale-up compensation (`compensateApply`) only reverts a backend field the failed `apply()` call actually raised, matching the `current > baseline` guard already used by window close/restore. Previously it could push an untouched field toward a stale recorded baseline, including upward if that baseline was above the field's live value.
+- Compensation failures during rollback are now logged instead of silently discarded.
+- `test-kind-backends` (KEDA Recipe B / `keda-external`): the e2e fixture no longer applies its own `eviction-guard-metrics` Service — it collided by name with the chart's new default-enabled metrics Service in the same namespace and made `helm upgrade --install` fail ownership validation, aborting the whole e2e-backends run before any case executed.
+- `PatchIntegers` single-path calls with no matching `values` entry now correctly no-op instead of writing the zero value (see Changed; unreachable from current callers, but a real bug in the code as written).
+
 ## [0.2.2] — 2026-09-13
 
 ### Added

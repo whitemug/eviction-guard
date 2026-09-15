@@ -1,0 +1,33 @@
+eviction-guard {{ .Chart.Version }} installed in {{ .Release.Namespace }}.
+
+Cluster singleton: install once per cluster. Chart fullname is "{{ include "eviction-guard.fullname" . }}"
+(ignores Release.Name); a second release collides on ClusterRole / ValidatingWebhookConfiguration names.
+
+Webhook failure policies (cluster-scoped rules):
+  eviction   → {{ include "eviction-guard.webhookFailurePolicy" (dict "root" . "specific" .Values.webhook.evictionFailurePolicy "default" "Fail") }}
+               (Fail rejects ALL pods/eviction CREATE while the webhook is unreachable)
+  deployment → {{ include "eviction-guard.webhookFailurePolicy" (dict "root" . "specific" .Values.webhook.deploymentFailurePolicy "default" "Ignore") }}
+  policy     → {{ include "eviction-guard.webhookFailurePolicy" (dict "root" . "specific" .Values.webhook.policyFailurePolicy "default" "Fail") }}
+
+CRDs: Helm 3 does not upgrade chart crds/ on helm upgrade. After chart bumps that change
+CRDs, apply them explicitly before or with the upgrade:
+  kubectl apply -f charts/eviction-guard/crds/
+
+Metrics: plaintext on {{ .Values.metrics.bindAddress }} (port {{ .Values.metrics.port }}).
+{{- if .Values.metrics.service.enabled }}
+ClusterIP Service: {{ include "eviction-guard.fullname" . }}-metrics
+{{- else }}
+Enable scrape DX with --set metrics.service.enabled=true
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+NetworkPolicy restricts ingress to health / metrics / webhook ports.
+{{- else }}
+Optional: --set networkPolicy.enabled=true on multi-tenant clusters.
+{{- end }}
+
+Webhook TLS: Helm self-signed Secret is reused across upgrades (expires after
+webhook.certDurationDays, default 365). Rotate by deleting the Secret then
+helm upgrade, or set webhook.certManager.enabled=true (requires cert-manager).
+
+Verify Cosign signatures: see docs/publishing.md
+Next: docs/install.md · docs/configure.md · UPGRADING.md

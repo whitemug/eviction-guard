@@ -54,7 +54,7 @@ Prometheus metric **names** (`evg_*`) are an observability contract; the `pkg/me
 
 Node coverage is configured via `EvictionGuardPolicy.spec.nodeFilter` (and `customSignals`). Capacity targets use `spec.backends` — there is no Go filter/backend registry for those.
 
-After changing `api/`, run `make generate manifests` and commit the generated CRDs and `zz_generated.deepcopy.go`.
+After changing `api/`, run `make generate manifests` and commit the generated CRDs and `zz_generated.deepcopy.go`. `make manifests` also runs `helm-crds` so `charts/eviction-guard/crds/` matches `config/crd/bases` (Helm 3 does not upgrade chart CRDs on `helm upgrade` — see [UPGRADING.md](UPGRADING.md)).
 
 Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 

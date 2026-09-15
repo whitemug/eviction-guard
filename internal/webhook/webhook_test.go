@@ -148,6 +148,42 @@ func (c *errGetClient) Get(ctx context.Context, key client.ObjectKey, obj client
 	return c.Client.Get(ctx, key, obj, opts...)
 }
 
+func TestEvictionWebhookDecodeFallbackEmptyObject(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-a", Namespace: "app"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	v := &evictionValidator{client: c, decoder: decoder(t)}
+
+	// Empty Object.raw + name/namespace → fall back (allow non-protected pod).
+	empty := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Name:      "web-a",
+		Namespace: "app",
+		Kind:      metav1.GroupVersionKind{Group: "policy", Version: "v1", Kind: "Eviction"},
+	}}
+	resp := v.Handle(context.Background(), empty)
+	if !resp.Allowed {
+		t.Fatalf("empty object fallback must evaluate pod, got %+v", resp)
+	}
+
+	// Non-empty garbage body must not fall back.
+	bad := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Name:      "web-a",
+		Namespace: "app",
+		Kind:      metav1.GroupVersionKind{Group: "policy", Version: "v1", Kind: "Eviction"},
+		Object:    runtime.RawExtension{Raw: []byte(`{not-json`)},
+	}}
+	resp = v.Handle(context.Background(), bad)
+	if resp.Allowed {
+		t.Fatal("corrupt object must not fall back / allow")
+	}
+	if resp.Result == nil || resp.Result.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %+v", resp)
+	}
+}
+
 func evictionReq(t *testing.T, ns, name string) admission.Request {
 	t.Helper()
 	ev := &policyv1.Eviction{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}

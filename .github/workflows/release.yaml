@@ -30,6 +30,25 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+      # Build amd64 locally first so Trivy can reject CVEs before any push.
+      - uses: docker/build-push-action@v7
+        id: build-scan
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: eviction-guard:release-scan
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Trivy (pre-push)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: eviction-guard:release-scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
       - uses: docker/build-push-action@v7
         id: push
         with:
@@ -38,18 +57,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-      - name: Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          image-ref: ghcr.io/${{ github.repository }}@${{ steps.push.outputs.digest }}
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
       - uses: sigstore/cosign-installer@v3
       - name: Sign image
         env:
@@ -57,6 +64,15 @@ jobs:
         run: |
           set -euo pipefail
           cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
+      - name: Generate SBOM (syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          artifact-name: eviction-guard-sbom.spdx.json
+          output-file: /tmp/eviction-guard-sbom.spdx.json
+          upload-artifact: true
+          upload-release-assets: false
       - uses: azure/setup-helm@v5
         with:
           version: v3.17.3
@@ -128,4 +144,7 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" \
               --title "v${VERSION}" \
               --notes-file /tmp/release-notes.md
+          fi
+          if [[ -f /tmp/eviction-guard-sbom.spdx.json ]]; then
+            gh release upload "${GITHUB_REF_NAME}" /tmp/eviction-guard-sbom.spdx.json --clobber
           fi

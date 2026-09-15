@@ -180,6 +180,11 @@ type EvictionGuardWindowList struct {
 	Items           []EvictionGuardWindow `json:"items"`
 }
 
+// IsActive reports whether this window still counts toward policy caps and
+// eviction gating. Open, Cooling, and Held are active. An empty Phase (status
+// not yet written after create) is also treated as active so a brand-new window
+// is not dropped from maxConcurrentWindows accounting or the eviction gate
+// before the first status update. Closed / ForcedCool-only tombstones are not.
 func (w *EvictionGuardWindow) IsActive() bool {
 	switch w.Status.Phase {
 	case WindowPhaseOpen, WindowPhaseCooling, WindowPhaseHeld, "":

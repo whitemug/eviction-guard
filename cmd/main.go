@@ -9,6 +9,8 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"net/http"
 	"os"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,17 +43,24 @@ func main() {
 		metricsAddr          string
 		probeAddr            string
 		enableLeaderElection bool
+		webhookEnabled       bool
 		webhookCertDir       string
 	)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "Prometheus metrics bind address")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "Health probe bind address")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", true, "Enable leader election for HA")
-	flag.StringVar(&webhookCertDir, "webhook-cert-dir", "", "Directory with tls.crt/tls.key. Empty disables the validating webhook.")
+	flag.BoolVar(&webhookEnabled, "webhook-enabled", true, "Serve the validating webhook. Set false for local/dev without TLS certs (disables eviction gating).")
+	flag.StringVar(&webhookCertDir, "webhook-cert-dir", "", "Directory with tls.crt/tls.key for the validating webhook. Required when --webhook-enabled=true.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if webhookEnabled && webhookCertDir == "" {
+		setupLog.Error(nil, "--webhook-enabled=true requires --webhook-cert-dir (directory with tls.crt/tls.key); set --webhook-enabled=false only for local/dev without the admission webhook")
+		os.Exit(1)
+	}
 
 	mgrOpts := ctrl.Options{
 		Scheme: scheme,
@@ -62,7 +71,7 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "eviction-guard.eviction-guard.io",
 	}
-	if webhookCertDir != "" {
+	if webhookEnabled {
 		mgrOpts.WebhookServer = ctrlwebhook.NewServer(ctrlwebhook.Options{
 			Port:    9443,
 			CertDir: webhookCertDir,
@@ -93,23 +102,35 @@ func main() {
 		os.Exit(1)
 	}
 
-	if webhookCertDir != "" {
+	if webhookEnabled {
 		if err := egwebhook.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook")
 			os.Exit(1)
 		}
 		setupLog.Info("validating webhook enabled", "certDir", webhookCertDir)
+	} else {
+		setupLog.Info("validating webhook disabled (--webhook-enabled=false)")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
-
+	// Ready only after informers sync so webhook/controllers do not serve on a cold cache.
+	if err := mgr.AddReadyzCheck("cache", func(req *http.Request) error {
+		ctx := req.Context()
+		if !mgr.GetCache().WaitForCacheSync(ctx) {
+			return fmt.Errorf("cache not synced")
+		}
+		return nil
+	}); err != nil {
+		setupLog.Error(err, "unable to set up cache ready check")
+		os.Exit(1)
+	}
 	setupLog.Info("starting eviction-guard manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")

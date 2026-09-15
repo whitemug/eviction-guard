@@ -93,3 +93,18 @@ func TestTaintSelector(t *testing.T) {
 	mustMatch(t, f, node("gpu", nil, corev1.Taint{Key: "dedicated", Value: "gpu", Effect: corev1.TaintEffectNoSchedule}), true)
 	mustMatch(t, f, node("cpu", nil), false)
 }
+
+func TestFromSpecRejectsBadSelector(t *testing.T) {
+	_, err := filters.FromSpec(egv1a1.NodeFilter{
+		LabelSelector: &metav1.LabelSelector{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      "pool",
+				Operator: "NotARealOperator",
+				Values:   []string{"x"},
+			}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected labelSelector compile error")
+	}
+}

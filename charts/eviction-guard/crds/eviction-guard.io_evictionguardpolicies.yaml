@@ -72,6 +72,13 @@ spec:
                         keda.sh/v1alpha1).
                       minLength: 1
                       type: string
+                    defaultWhenUnset:
+                      description: |-
+                        DefaultWhenUnset is the integer Current returns when the path is absent on
+                        the object. When unset: Deployment and HorizontalPodAutoscaler default to 1;
+                        other kinds require this field or Current errors.
+                      format: int32
+                      type: integer
                     kind:
                       description: Kind of the target object (e.g. Deployment, ScaledObject).
                       minLength: 1
@@ -221,16 +228,19 @@ spec:
                   type: string
                 type: array
               maxBuffer:
-                description: MaxBuffer caps how many extra replicas a single scale-up
-                  may add. Defaults to 4.
+                description: |-
+                  MaxBuffer caps how many extra replicas a single scale-up may add. Defaults to 4.
+                  Set explicitly to 0 for unlimited (same pattern as maxWindow / maxConcurrentWindows);
+                  that is not “add zero extras”.
                 format: int32
                 minimum: 0
                 type: integer
               maxConcurrentWindows:
                 description: |-
-                  MaxConcurrentWindows caps how many Open/Cooling/Held EvictionGuardWindows this
-                  policy may hold at once. At-risk workloads without a window wait until one
-                  closes (scale-back finished). Defaults to 8. Set 0 for unlimited.
+                  MaxConcurrentWindows caps how many scaling Open/Cooling/Held EvictionGuardWindows
+                  this policy may hold at once (deferred/no-scale windows are excluded). Extra
+                  at-risk workloads get a deferred Window that arms maxWindow/ForcedCool without
+                  capacity patches until a scaling slot frees. Defaults to 8. Set 0 for unlimited.
                 format: int32
                 minimum: 0
                 type: integer
@@ -543,8 +553,9 @@ spec:
               and other plugins.
             properties:
               activeWindows:
-                description: ActiveWindows is how many Open/Cooling/Held EvictionGuardWindows
-                  this policy owns.
+                description: |-
+                  ActiveWindows is how many scaling Open/Cooling/Held EvictionGuardWindows this
+                  policy owns (deferred/no-scale windows are not counted here).
                 format: int32
                 type: integer
               conditions:
@@ -608,8 +619,9 @@ spec:
                 type: array
               deferredWorkloads:
                 description: |-
-                  DeferredWorkloads is how many at-risk opted-in Deployments are waiting
-                  for a window slot because MaxConcurrentWindows is already reached.
+                  DeferredWorkloads is how many at-risk opted-in Deployments are waiting for a
+                  scaling slot because MaxConcurrentWindows is already reached. Each still has
+                  a deferred Window so eviction fail-opens after maxWindow (ForcedCool).
                 format: int32
                 type: integer
               matchedNodes:

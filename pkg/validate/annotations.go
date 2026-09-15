@@ -16,12 +16,15 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/backends"
 )
 
 var (
 	dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	fieldPathSeg = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // ScaleBackendRequired reports an error when eviction-guard.io/scale-backend is
@@ -80,11 +83,30 @@ func Policy(p *egv1a1.EvictionGuardPolicy) error {
 	if p == nil {
 		return nil
 	}
+	if err := validateLabelSelector("spec.nodeFilter.labelSelector", p.Spec.NodeFilter.LabelSelector); err != nil {
+		return err
+	}
+	if err := validateLabelSelector("spec.nodeFilter.excludeLabelSelector", p.Spec.NodeFilter.ExcludeLabelSelector); err != nil {
+		return err
+	}
+	if err := validateLabelSelector("spec.workloadSelector", p.Spec.WorkloadSelector); err != nil {
+		return err
+	}
+	if err := validateLabelSelector("spec.namespaceSelector", p.Spec.NamespaceSelector); err != nil {
+		return err
+	}
 	if pat := p.Spec.NodeFilter.NamePattern; pat != "" {
 		if _, err := filepath.Match(pat, ""); err != nil {
 			return fmt.Errorf("spec.nodeFilter.namePattern: %w", err)
 		}
 	}
+	if p.Spec.ScaleBackAfter != nil && p.Spec.ScaleBackAfter.Duration < 0 {
+		return fmt.Errorf("spec.scaleBackAfter must not be negative")
+	}
+	if p.Spec.MaxWindow != nil && p.Spec.MaxWindow.Duration < 0 {
+		return fmt.Errorf("spec.maxWindow must not be negative (0 means unlimited)")
+	}
+	// MaxBuffer 0 is valid and means unlimited (same pattern as maxWindow).
 	if len(p.Spec.Backends) == 0 {
 		return fmt.Errorf("spec.backends is required")
 	}
@@ -101,21 +123,49 @@ func Policy(p *egv1a1.EvictionGuardPolicy) error {
 		if len(entry.Patches) == 0 {
 			continue
 		}
-		paths := 0
 		seenPath := map[string]bool{}
 		for i, patch := range entry.Patches {
 			if patch.Path == "" && patch.Annotation == "" {
 				return fmt.Errorf("spec.backends[%s].patches[%d]: set path or annotation", key, i)
 			}
 			if patch.Path != "" {
+				if err := validateFieldPath(patch.Path); err != nil {
+					return fmt.Errorf("spec.backends[%s].patches[%d].path: %w", key, i, err)
+				}
 				if seenPath[patch.Path] {
 					return fmt.Errorf("spec.backends[%s]: duplicate path %q", key, patch.Path)
 				}
 				seenPath[patch.Path] = true
-				paths++
 			}
 		}
-		// Zero paths (annotation-only or empty) is allowed: external scaler entry.
+	}
+	return nil
+}
+
+func validateLabelSelector(field string, sel *metav1.LabelSelector) error {
+	if sel == nil {
+		return nil
+	}
+	if _, err := metav1.LabelSelectorAsSelector(sel); err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
+	return nil
+}
+
+// validateFieldPath checks dotted JSON paths used for integer capacity patches
+// (e.g. spec.replicas, spec.minReplicas). Rejects empty segments and odd shapes.
+func validateFieldPath(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("empty")
+	}
+	if strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+		return fmt.Errorf("%q has empty segments", path)
+	}
+	for _, seg := range strings.Split(path, ".") {
+		if !fieldPathSeg.MatchString(seg) {
+			return fmt.Errorf("%q is not a simple dotted path", path)
+		}
 	}
 	return nil
 }

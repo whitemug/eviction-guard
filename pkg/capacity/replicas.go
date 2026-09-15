@@ -6,6 +6,7 @@ See LICENSE in the project root for license information.
 */
 
 // Package capacity implements Strategy A: target = baseline + spare, capped by maxBuffer.
+// maxBuffer <= 0 disables the cap (unlimited extras), matching MaxBuffer 0 on the policy.
 package capacity
 
 // TargetReplicas returns the replica count to scale to.

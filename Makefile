@@ -29,12 +29,16 @@ manifests: controller-gen ## Generate CRDs and RBAC
 	$(MAKE) helm-crds
 
 .PHONY: helm-crds
-helm-crds: ## Copy generated CRDs into the Helm chart
+helm-crds: ## Copy generated CRDs into the Helm chart (keep charts/eviction-guard/crds == config/crd/bases)
 	mkdir -p charts/eviction-guard/crds
 	cp config/crd/bases/*.yaml charts/eviction-guard/crds/
 
 .PHONY: test
 test: generate manifests fmt vet ## Run unit tests (fake client; no envtest)
+	$(GO) test ./... -coverprofile cover.out
+
+.PHONY: test-unit
+test-unit: ## Run unit tests without generate/manifests (fast local loop)
 	$(GO) test ./... -coverprofile cover.out
 
 ENVTEST ?= $(LOCALBIN)/setup-envtest
@@ -63,10 +67,17 @@ test-kind-backends: ## Kind e2e backends (fresh cluster default). REUSE=1 KEEP=1
 	chmod +x test/e2e/backends.sh
 	test/e2e/backends.sh $(ARGS) $(if $(filter 1,$(VERBOSE)),--verbose) $(if $(filter 1,$(KEEP)),--keep)
 
+KUBECONFORM ?= kubeconform
+
 .PHONY: helm-lint
 helm-lint: ## helm lint + helm template (no cluster)
 	helm lint charts/eviction-guard
 	helm template eviction-guard charts/eviction-guard --namespace eviction-guard-system >/dev/null
+
+.PHONY: helm-kubeconform
+helm-kubeconform: ## helm template | kubeconform (install kubeconform or set KUBECONFORM=)
+	helm template eviction-guard charts/eviction-guard --namespace eviction-guard-system \
+		| $(KUBECONFORM) -strict -ignore-missing-schemas -summary
 
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.13.2

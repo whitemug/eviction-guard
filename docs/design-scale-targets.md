@@ -2,7 +2,7 @@
 
 Status: **decisions locked for 0.2.0** (multi-policy ownership + backend catalog shipped). This is design rationale, not a day-2 operator guide — see [Configure](configure.md) and [Extension](extension.md). Core architecture: [Design](design.md).
 
-**Follow-up (2026-09):** expand membership / SpareReady beyond Deployment via a Target abstraction before API freeze — [Design](design.md) **D2**.
+**Follow-up (2026-09):** expand membership / SpareReady beyond Deployment via a Target abstraction before API freeze — [design-targets.md](design-targets.md) (**D2**).
 
 ## Problem
 

@@ -36,18 +36,16 @@ import (
 	"github.com/whitemug/eviction-guard/pkg/metrics"
 	"github.com/whitemug/eviction-guard/pkg/policyown"
 	"github.com/whitemug/eviction-guard/pkg/signals"
+	"github.com/whitemug/eviction-guard/pkg/workload"
 )
 
 const (
-	IndexPodNodeName = "spec.nodeName"
-
 	reasonScaledUp      = "ScaledUp"
 	reasonPolicyReady   = "Ready"
 	reasonPolicyError   = "ReconcileError"
 	reasonWindowOpened  = "WindowOpened"
 	reasonWindowsCapped = "WindowsCapped"
 	reasonScaleUpFailed = "ScaleUpFailed"
-	requeueDeferred     = 15 * time.Second
 )
 
 // PolicyReconciler watches Nodes (and related objects) and opens disruption windows
@@ -75,6 +73,7 @@ func (r *PolicyReconciler) now() time.Time {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;update;patch
@@ -141,17 +140,24 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	cap := policy.MaxConcurrentWindowsOrDefault()
+	windowCap := policy.MaxConcurrentWindowsOrDefault()
 	var deferred int32
 	var scaleErrs []error
 	for _, key := range sortedWorkloadKeys(workloads) {
 		w := workloads[key]
-		held, err := r.hasActiveWindow(ctx, policy, w)
+		win, err := r.getWindow(ctx, policy, w)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if !held && cap > 0 && active >= cap {
+		held := win != nil && win.IsActive()
+		waiting := !held || isDeferredWindow(win)
+		if waiting && windowCap > 0 && active >= windowCap {
 			deferred++
+			if err := r.ensureDeferredWindow(ctx, policy, w); err != nil {
+				logger.Error(err, "deferred window failed", "deployment", w.deploy.Name, "namespace", w.deploy.Namespace)
+				scaleErrs = append(scaleErrs, fmt.Errorf("%s/%s deferred: %w", w.deploy.Namespace, w.deploy.Name, err))
+				continue
+			}
 			if err := r.publishWorkloadMetrics(ctx, policy, w); err != nil {
 				logger.Error(err, "workload metrics", "deployment", w.deploy.Name, "namespace", w.deploy.Namespace)
 			}
@@ -166,14 +172,14 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			scaleErrs = append(scaleErrs, fmt.Errorf("%s/%s: %w", w.deploy.Namespace, w.deploy.Name, err))
 			continue
 		}
-		if !held {
+		if waiting {
 			active++
 		}
 	}
 	if deferred > 0 {
 		emitf(r.Recorder, policy, corev1.EventTypeNormal, reasonWindowsCapped,
 			"%d workload(s) waiting for a window slot (active %d, maxConcurrentWindows %d)",
-			deferred, active, cap)
+			deferred, active, windowCap)
 	}
 	metrics.DeferredWorkloads.WithLabelValues(policy.Name).Set(float64(deferred))
 
@@ -221,6 +227,12 @@ func (r *PolicyReconciler) collectWorkloads(ctx context.Context, policy *egv1a1.
 	}
 
 	nsCache := map[string]labels.Set{}
+	// rsKey ("ns/rsName") → Deployment for this reconcile (avoids N+1 Gets).
+	ownerByRS := map[string]*appsv1.Deployment{}
+	// dep key ("ns/name") → ownership decision, so policyown.Owns (which walks
+	// every policy and recompiles selectors) runs once per Deployment even
+	// when many of its pods are at risk, not once per pod.
+	ownsByDep := map[string]bool{}
 	out := map[string]*workloadState{}
 	for _, n := range vulnerable {
 		pods, err := r.podsOnNode(ctx, n.Name)
@@ -232,7 +244,7 @@ func (r *PolicyReconciler) collectWorkloads(ctx context.Context, policy *egv1a1.
 			if pod.DeletionTimestamp != nil {
 				continue
 			}
-			dep, err := r.ownerDeployment(ctx, pod)
+			dep, err := r.ownerDeploymentCached(ctx, pod, ownerByRS)
 			if err != nil {
 				return nil, err
 			}
@@ -242,14 +254,19 @@ func (r *PolicyReconciler) collectWorkloads(ctx context.Context, policy *egv1a1.
 			if !workloadProtected(dep, pod) {
 				continue
 			}
-			nsLabels, err := r.namespaceLabels(ctx, pod.Namespace, nsCache)
-			if err != nil {
-				return nil, err
+			key := dep.Namespace + "/" + dep.Name
+			owns, ok := ownsByDep[key]
+			if !ok {
+				nsLabels, err := r.namespaceLabels(ctx, pod.Namespace, nsCache)
+				if err != nil {
+					return nil, err
+				}
+				owns = policyown.Owns(policy, dep, nsLabels, all)
+				ownsByDep[key] = owns
 			}
-			if !policyown.Owns(policy, dep, nsLabels, all) {
+			if !owns {
 				continue
 			}
-			key := dep.Namespace + "/" + dep.Name
 			st, ok := out[key]
 			if !ok {
 				st = &workloadState{deploy: dep, nodes: map[string]struct{}{}}
@@ -266,32 +283,34 @@ func (r *PolicyReconciler) namespaceLabels(ctx context.Context, nsName string, c
 	if cached, ok := cache[nsName]; ok {
 		return cached, nil
 	}
-	ns := &corev1.Namespace{}
-	if err := r.Get(ctx, types.NamespacedName{Name: nsName}, ns); err != nil {
-		if apierrors.IsNotFound(err) {
-			cache[nsName] = labels.Set{}
-			return labels.Set{}, nil
-		}
+	set, err := workload.NamespaceLabels(ctx, r.Client, nsName)
+	if err != nil {
 		return nil, err
 	}
-	set := labels.Set(ns.Labels)
 	cache[nsName] = set
 	return set, nil
 }
 
-func (r *PolicyReconciler) hasActiveWindow(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, w *workloadState) (bool, error) {
+func (r *PolicyReconciler) getWindow(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, w *workloadState) (*egv1a1.EvictionGuardWindow, error) {
 	win := &egv1a1.EvictionGuardWindow{}
 	err := r.Get(ctx, types.NamespacedName{
 		Namespace: w.deploy.Namespace,
 		Name:      WindowName(policy.Name, w.deploy.Namespace, w.deploy.Name),
 	}, win)
 	if apierrors.IsNotFound(err) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return win.IsActive(), nil
+	return win, nil
+}
+
+// isDeferredWindow reports a no-scale placeholder opened while maxConcurrentWindows
+// was saturated. Deferred windows arm maxWindow/ForcedCool but do not consume a
+// scaling slot until ensureWindow promotes them.
+func isDeferredWindow(win *egv1a1.EvictionGuardWindow) bool {
+	return win != nil && win.Labels != nil && win.Labels[egv1a1.DeferredLabel] == "true"
 }
 
 func sortedWorkloadKeys(m map[string]*workloadState) []string {
@@ -301,6 +320,108 @@ func sortedWorkloadKeys(m map[string]*workloadState) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ensureDeferredWindow opens or refreshes a lightweight Window with no capacity
+// patches so eviction stays gated and maxWindow can ForcedCool fail-open while
+// the workload waits for a maxConcurrentWindows slot.
+func (r *PolicyReconciler) ensureDeferredWindow(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, w *workloadState) error {
+	winName := WindowName(policy.Name, w.deploy.Namespace, w.deploy.Name)
+	win := &egv1a1.EvictionGuardWindow{}
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: w.deploy.Namespace, Name: winName}, win)
+	exists := getErr == nil
+	if !exists && !apierrors.IsNotFound(getErr) {
+		return getErr
+	}
+	if exists && holdMaxWindow(policy, win, r.now()) {
+		return nil
+	}
+
+	metrics.AtRiskPods.WithLabelValues(policy.Name, w.deploy.Namespace, w.deploy.Name).Set(float64(w.atRisk))
+	baseline := deployReplicas(w.deploy)
+	if exists && win.Spec.Baseline > 0 {
+		baseline = win.Spec.Baseline
+	}
+	nodeNames := sortedKeys(w.nodes)
+	msg := "deferred: waiting for maxConcurrentWindows slot; eviction fail-opens after maxWindow"
+
+	if !exists {
+		win = &egv1a1.EvictionGuardWindow{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      winName,
+				Namespace: w.deploy.Namespace,
+				Labels: map[string]string{
+					egv1a1.PolicyLabel:            policy.Name,
+					egv1a1.WorkloadNameLabel:      w.deploy.Name,
+					egv1a1.WorkloadNamespaceLabel: w.deploy.Namespace,
+					egv1a1.DeferredLabel:          "true",
+				},
+			},
+			Spec: egv1a1.EvictionGuardWindowSpec{
+				PolicyName:      policy.Name,
+				Target:          workloadRef(w.deploy),
+				Baseline:        baseline,
+				ScaledTo:        baseline,
+				VulnerableNodes: nodeNames,
+			},
+		}
+		controllerutil.AddFinalizer(win, egv1a1.WindowFinalizer)
+		policy.SetGroupVersionKind(egv1a1.GroupVersion.WithKind("EvictionGuardPolicy"))
+		if err := controllerutil.SetControllerReference(policy, win, r.Scheme); err != nil {
+			return fmt.Errorf("ownerref: %w", err)
+		}
+		if err := r.Create(ctx, win); err != nil {
+			return err
+		}
+		now := metav1.NewTime(r.now())
+		win.Status.Phase = egv1a1.WindowPhaseOpen
+		win.Status.Message = msg
+		win.Status.LastScaleTime = &now
+		applyCapacityApplied(win, nil, now)
+		if err := r.Status().Update(ctx, win); err != nil {
+			return err
+		}
+		emitf(r.Recorder, policy, corev1.EventTypeNormal, reasonWindowOpened,
+			"opened deferred window %s/%s for %s (waiting for slot)", win.Namespace, win.Name, w.deploy.Name)
+		return nil
+	}
+
+	patch := client.MergeFrom(win.DeepCopy())
+	if win.Labels == nil {
+		win.Labels = map[string]string{}
+	}
+	win.Labels[egv1a1.DeferredLabel] = "true"
+	win.Spec.VulnerableNodes = nodeNames
+	win.Spec.ScaledTo = baseline
+	win.Spec.Baseline = baseline
+	win.Spec.Actions = nil
+	win.Spec.WindowUntil = nil
+	if err := r.Patch(ctx, win, patch); err != nil {
+		return err
+	}
+	statusDirty := false
+	if win.Status.Phase != egv1a1.WindowPhaseOpen {
+		win.Status.Phase = egv1a1.WindowPhaseOpen
+		statusDirty = true
+	}
+	if win.Status.Message != msg {
+		win.Status.Message = msg
+		statusDirty = true
+	}
+	if win.Status.LastScaleTime == nil {
+		ts := metav1.NewTime(r.now())
+		win.Status.LastScaleTime = &ts
+		statusDirty = true
+	}
+	if applyCapacityApplied(win, nil, metav1.NewTime(r.now())) {
+		statusDirty = true
+	}
+	if statusDirty {
+		if err := r.Status().Update(ctx, win); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, w *workloadState) error {
@@ -332,24 +453,15 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 	}
 	setWorkloadPlanMetrics(policy.Name, w.deploy.Namespace, w.deploy.Name, w.atRisk, plan.desired, plan.primaryBaseline)
 
-	scaled, applyErr := plan.apply(ctx, r.Client, policy.Name)
-	now := r.now()
-	if applyErr == nil && scaled {
-		emitf(r.Recorder, w.deploy, corev1.EventTypeNormal, reasonScaledUp,
-			"policy %q scaled replicas to %d (baseline %d) ahead of disruption on nodes %v",
-			policy.Name, plan.desired, plan.primaryBaseline, nodeNames)
-	}
 	actions := plan.actions(existingActions)
 	openMsg := "scaled up ahead of node disruption"
 	if len(plan.steps) == 0 {
 		openMsg = "opened window for external scaler (no capacity patches)"
 	}
-	if applyErr != nil {
-		openMsg = fmt.Sprintf("capacity apply failed; eviction fail-opens after maxWindow: %v", applyErr)
-	}
 
-	// Always open/update the Window so eviction stays gated and maxWindow can
-	// fail-open even when a catalog patch is rejected (admission, RBAC, …).
+	// Create/patch the Window before mutating capacity so a failed Create cannot
+	// leave an orphaned scale-up with no maxWindow clock. If apply fails after
+	// the Window exists, CapacityApplied=False and maxWindow still fail-opens.
 	if !exists {
 		win = &egv1a1.EvictionGuardWindow{
 			ObjectMeta: metav1.ObjectMeta{
@@ -376,47 +488,47 @@ func (r *PolicyReconciler) ensureWindow(ctx context.Context, policy *egv1a1.Evic
 			return fmt.Errorf("ownerref: %w", err)
 		}
 		if err := r.Create(ctx, win); err != nil {
-			if applyErr != nil {
-				return fmt.Errorf("create window after apply error: %v; apply: %w", err, applyErr)
-			}
-			return err
-		}
-		win.Status.Phase = egv1a1.WindowPhaseOpen
-		win.Status.Message = openMsg
-		ts := metav1.NewTime(now)
-		win.Status.LastScaleTime = &ts
-		applyCapacityApplied(win, applyErr, ts)
-		if err := r.Status().Update(ctx, win); err != nil {
-			if applyErr != nil {
-				return fmt.Errorf("window status after apply error: %v; apply: %w", err, applyErr)
-			}
 			return err
 		}
 		emitf(r.Recorder, policy, corev1.EventTypeNormal, reasonWindowOpened,
 			"opened window %s/%s for %s", win.Namespace, win.Name, w.deploy.Name)
-		return applyErr
+	} else {
+		patch := client.MergeFrom(win.DeepCopy())
+		if win.Labels != nil {
+			delete(win.Labels, egv1a1.DeferredLabel)
+		}
+		win.Spec.VulnerableNodes = nodeNames
+		win.Spec.ScaledTo = plan.desired
+		win.Spec.Baseline = plan.primaryBaseline
+		win.Spec.Actions = actions
+		win.Spec.WindowUntil = nil
+		if err := r.Patch(ctx, win, patch); err != nil {
+			return err
+		}
 	}
 
-	patch := client.MergeFrom(win.DeepCopy())
-	win.Spec.VulnerableNodes = nodeNames
-	win.Spec.ScaledTo = plan.desired
-	win.Spec.Actions = actions
-	win.Spec.WindowUntil = nil
-	if err := r.Patch(ctx, win, patch); err != nil {
-		if applyErr != nil {
-			return fmt.Errorf("patch window after apply error: %v; apply: %w", err, applyErr)
-		}
-		return err
+	scaled, applyErr := plan.apply(ctx, r.Client, policy.Name)
+	now := r.now()
+	if applyErr == nil && scaled {
+		emitf(r.Recorder, w.deploy, corev1.EventTypeNormal, reasonScaledUp,
+			"policy %q scaled replicas to %d (baseline %d) ahead of disruption on nodes %v",
+			policy.Name, plan.desired, plan.primaryBaseline, nodeNames)
 	}
+	if applyErr != nil {
+		openMsg = fmt.Sprintf("capacity apply failed; eviction fail-opens after maxWindow: %v", applyErr)
+	}
+
 	statusDirty := false
 	if win.Status.Phase != egv1a1.WindowPhaseOpen {
 		win.Status.Phase = egv1a1.WindowPhaseOpen
-		win.Status.Message = "vulnerable nodes present"
-		if applyErr != nil {
-			win.Status.Message = openMsg
-		}
 		statusDirty = true
-	} else if applyErr != nil {
+	}
+	if win.Status.LastScaleTime == nil {
+		ts := metav1.NewTime(now)
+		win.Status.LastScaleTime = &ts
+		statusDirty = true
+	}
+	if win.Status.Message != openMsg {
 		win.Status.Message = openMsg
 		statusDirty = true
 	}
@@ -465,16 +577,17 @@ func setWorkloadPlanMetrics(policy, ns, workload string, atRisk, desired, baseli
 }
 
 func clearWorkloadPlanMetrics(policy, ns, workload string) {
-	metrics.AtRiskPods.WithLabelValues(policy, ns, workload).Set(0)
-	metrics.DesiredReplicas.WithLabelValues(policy, ns, workload).Set(0)
-	metrics.CurrentSpare.WithLabelValues(policy, ns, workload).Set(0)
-	metrics.SpareNotReady.WithLabelValues(policy, ns, workload).Set(0)
-	metrics.CapacityApplyError.WithLabelValues(policy, ns, workload).Set(0)
+	// Delete series so cardinality does not grow with churned workloads.
+	_ = metrics.AtRiskPods.DeleteLabelValues(policy, ns, workload)
+	_ = metrics.DesiredReplicas.DeleteLabelValues(policy, ns, workload)
+	_ = metrics.CurrentSpare.DeleteLabelValues(policy, ns, workload)
+	_ = metrics.SpareNotReady.DeleteLabelValues(policy, ns, workload)
+	_ = metrics.CapacityApplyError.DeleteLabelValues(policy, ns, workload)
 }
 
 func (r *PolicyReconciler) syncClearedWindows(ctx context.Context, policy *egv1a1.EvictionGuardPolicy, active map[string]*workloadState) error {
 	list := &egv1a1.EvictionGuardWindowList{}
-	if err := r.List(ctx, list, client.MatchingLabels{egv1a1.PolicyLabel: policy.Name}); err != nil {
+	if err := r.List(ctx, list, client.MatchingFields{IndexWindowPolicyName: policy.Name}); err != nil {
 		return err
 	}
 	for i := range list.Items {
@@ -538,12 +651,13 @@ func (r *PolicyReconciler) nodesStillVulnerable(ctx context.Context, policy *egv
 
 func (r *PolicyReconciler) countActiveWindows(ctx context.Context, policy *egv1a1.EvictionGuardPolicy) (int32, error) {
 	list := &egv1a1.EvictionGuardWindowList{}
-	if err := r.List(ctx, list, client.MatchingLabels{egv1a1.PolicyLabel: policy.Name}); err != nil {
+	if err := r.List(ctx, list, client.MatchingFields{IndexWindowPolicyName: policy.Name}); err != nil {
 		return 0, err
 	}
 	var n int32
 	for i := range list.Items {
-		if list.Items[i].IsActive() {
+		win := &list.Items[i]
+		if win.IsActive() && !isDeferredWindow(win) {
 			n++
 		}
 	}
@@ -552,7 +666,7 @@ func (r *PolicyReconciler) countActiveWindows(ctx context.Context, policy *egv1a
 
 func (r *PolicyReconciler) cleanup(ctx context.Context, policy *egv1a1.EvictionGuardPolicy) (ctrl.Result, error) {
 	list := &egv1a1.EvictionGuardWindowList{}
-	if err := r.List(ctx, list, client.MatchingLabels{egv1a1.PolicyLabel: policy.Name}); err != nil {
+	if err := r.List(ctx, list, client.MatchingFields{IndexWindowPolicyName: policy.Name}); err != nil {
 		return ctrl.Result{}, err
 	}
 	if len(list.Items) > 0 {
@@ -561,7 +675,7 @@ func (r *PolicyReconciler) cleanup(ctx context.Context, policy *egv1a1.EvictionG
 				return ctrl.Result{}, err
 			}
 		}
-		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: requeuePolicyCleanup}, nil
 	}
 	if controllerutil.ContainsFinalizer(policy, egv1a1.PolicyFinalizer) {
 		patch := client.MergeFrom(policy.DeepCopy())
@@ -623,42 +737,34 @@ func (r *PolicyReconciler) updateStatus(ctx context.Context, policy *egv1a1.Evic
 
 func (r *PolicyReconciler) podsOnNode(ctx context.Context, nodeName string) ([]corev1.Pod, error) {
 	list := &corev1.PodList{}
-	if err := r.List(ctx, list, client.MatchingFields{IndexPodNodeName: nodeName}); err == nil {
-		return list.Items, nil
-	}
-	if err := r.List(ctx, list); err != nil {
+	if err := r.List(ctx, list, client.MatchingFields{IndexPodNodeName: nodeName}); err != nil {
+		log.FromContext(ctx).Error(err, "indexed pod list by node failed", "node", nodeName)
 		return nil, err
 	}
-	var out []corev1.Pod
-	for i := range list.Items {
-		if list.Items[i].Spec.NodeName == nodeName {
-			out = append(out, list.Items[i])
-		}
-	}
-	return out, nil
+	return list.Items, nil
 }
 
-func (r *PolicyReconciler) ownerDeployment(ctx context.Context, pod *corev1.Pod) (*appsv1.Deployment, error) {
+func (r *PolicyReconciler) ownerDeploymentCached(ctx context.Context, pod *corev1.Pod, cache map[string]*appsv1.Deployment) (*appsv1.Deployment, error) {
+	rsName := ""
 	for _, o := range pod.OwnerReferences {
-		if o.Kind != "ReplicaSet" || o.Controller == nil || !*o.Controller {
-			continue
-		}
-		rs := &appsv1.ReplicaSet{}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: o.Name}, rs); err != nil {
-			return nil, client.IgnoreNotFound(err)
-		}
-		for _, oo := range rs.OwnerReferences {
-			if oo.Kind != "Deployment" || oo.Controller == nil || !*oo.Controller {
-				continue
-			}
-			dep := &appsv1.Deployment{}
-			if err := r.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: oo.Name}, dep); err != nil {
-				return nil, client.IgnoreNotFound(err)
-			}
-			return dep, nil
+		if o.Kind == "ReplicaSet" && o.Controller != nil && *o.Controller {
+			rsName = o.Name
+			break
 		}
 	}
-	return nil, nil
+	if rsName == "" {
+		return nil, nil
+	}
+	key := pod.Namespace + "/" + rsName
+	if dep, ok := cache[key]; ok {
+		return dep, nil
+	}
+	dep, err := workload.OwnerDeployment(ctx, r.Client, pod)
+	if err != nil {
+		return nil, err
+	}
+	cache[key] = dep
+	return dep, nil
 }
 
 func workloadProtected(dep *appsv1.Deployment, pod *corev1.Pod) bool {
@@ -687,13 +793,12 @@ func workloadRef(dep *appsv1.Deployment) egv1a1.WorkloadReference {
 // and that node is currently vulnerable, and only when membership can change
 // (bind, labels, delete) — not Ready/status flips.
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
-		name := o.(*corev1.Pod).Spec.NodeName
-		if name == "" {
-			return nil
-		}
-		return []string{name}
-	}); err != nil {
+	if err := registerPodIndexes(mgr); err != nil {
+		return err
+	}
+	// Window indexes are shared with WindowReconciler; register once here so
+	// policy Lists by policyName work even if the window controller starts later.
+	if err := registerWindowIndexes(mgr); err != nil {
 		return err
 	}
 
