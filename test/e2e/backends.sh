@@ -519,7 +519,8 @@ ensure_keda() {
 ensure_prometheus() {
   [[ "$NEED_PROM" == "1" ]] || return 0
   echo "==> ensure Prometheus scrapes EVG metrics (Recipe B)"
-  # Metrics Service lives in eviction-guard-system; create it before helm installs the chart.
+  # Chart creates eviction-guard-metrics (metrics.service.enabled: true). Prometheus
+  # config targets that Service; ensure the namespace exists, then install Prometheus.
   kubectl create namespace eviction-guard-system --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -f "$ROOT/test/e2e/prometheus.yaml"
   wait_ok "prometheus available" 180 \

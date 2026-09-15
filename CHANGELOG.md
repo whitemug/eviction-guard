@@ -8,7 +8,7 @@ All notable changes to this project are documented here. Versions follow [SemVer
 
 ### Added
 
-- Deferred disruption windows when `maxConcurrentWindows` is hit: lightweight no-scale windows that still arm `maxWindow` / `ForcedCool` so drains fail-open instead of denying forever without a clock.
+- Deferred disruption windows when `maxConcurrentWindows` is hit: lightweight no-scale windows that still arm `maxWindow` / `ForcedCool` so drains fail-open instead of denying forever without a clock. Avoid pairing a finite `maxConcurrentWindows` with `maxWindow: 0` (unlimited) — deferred fail-open needs ForcedCool.
 - Split webhook `failurePolicy` knobs (`evictionFailurePolicy` default `Fail`, `deploymentFailurePolicy` default `Ignore`) with clear docs that eviction Fail is cluster-wide.
 - Helm metrics Service (`metrics.service.enabled`, default **true**) and NetworkPolicy (`networkPolicy.enabled`, default **true** — a port allow-list for the manager's own health/metrics/webhook ports, not a source restriction; safe no-op for existing traffic); `webhook.certManager.enabled` path; chart `NOTES.txt`.
 - Ready probes wait for cache sync (and webhook server when enabled).

@@ -25,7 +25,7 @@ spec:
   spareReplicas: 1
   maxBuffer: 4                     # 0 = unlimited (not “zero extra”)
   maxConcurrentWindows: 8          # 0 = unlimited
-  maxWindow: 2h                    # 0 = unlimited; ForcedCool fail-open (tune shorter for Spot, e.g. 15m)
+  maxWindow: 2h                    # 0 = unlimited (no ForcedCool); tune shorter for Spot, e.g. 15m
   backends:
     deployment:
       apiVersion: apps/v1
@@ -79,14 +79,16 @@ Do not rename a policy while its windows are Open — Kubernetes replace is dele
 |---|---|
 | `spareReplicas` | Extra replicas per window (clamped by `maxBuffer`) |
 | `maxBuffer` | Cap on extras added in one scale-up. Default **4**. Explicit **0 = unlimited** (same idea as `maxWindow`), not “add zero” |
-| `maxConcurrentWindows` | Cap non-deferred Open/Cooling windows; extras get a lightweight **deferred** window (no scale) that still arms `maxWindow` / `ForcedCool` |
-| `maxWindow` | Force-cool Open windows that last this long (`ForcedCool` → webhook allows eviction). Default **2h**; Spot drains often use **10–15m** so a stuck capacity apply does not look like a hard block |
+| `maxConcurrentWindows` | Cap non-deferred Open/Cooling windows; extras get a lightweight **deferred** window (no scale) that still arms `maxWindow` / `ForcedCool`. Default **8**; **0 = unlimited** (no deferred path) |
+| `maxWindow` | Force-cool Open windows that last this long (`ForcedCool` → webhook allows eviction). Default **2h**; Spot drains often use **10–15m** so a stuck capacity apply does not look like a hard block. **0 = unlimited** — no ForcedCool clock, including for deferred windows (see below) |
 | `backends.<key>.skipDownscaling` | Raise on disruption; leave integer paths at `ScaledTo` on close (stamps still cleared). Prefer scaler floors; use mainly on Deployment if you still bind it |
 | `backends.<key>.defaultWhenUnset` | Integer `Current` returns when the path is missing. Optional for Deployment/HPA (default **1**); required for other catalog kinds |
 | `scaleBackAfter` | Cooling duration after scale-back |
 | `backends` | Named catalog: key → apiVersion/kind/patches (include `deployment` + `hpa` in examples) |
 
 Eviction Guard patches capacity fields from the catalog (e.g. Deployment replicas, HPA `minReplicas`). When a patch is rejected (admission, RBAC, …), the Window still opens with `CapacityApplied=False` and drains fail-open after `maxWindow`. Optionally list both floor and ceiling paths on a catalog entry if you want Eviction Guard to raise both. See [How-to: capacity apply failures](howto.md#capacity-apply-failures-and-maxwindow-failover).
+
+**Deferred windows and `maxWindow: 0`:** when the concurrent-window cap is saturated, a deferred window still denies eviction until it is promoted (a scaling slot frees) or ForcedCool fires. ForcedCool only fires when `maxWindow` is a positive duration. Stock defaults (`maxConcurrentWindows: 8`, `maxWindow: 2h`) are safe. If you set **`maxWindow: 0` (unlimited)** while keeping a finite `maxConcurrentWindows`, deferred workloads can deny drains indefinitely until a slot frees — avoid that combination, or set `maxConcurrentWindows: 0` as well.
 
 `spec.backends` is required. Protected Deployments must set `eviction-guard.io/scale-backend` to list catalog keys (optional `key=name` / `key=ns/name`; bare key uses the Deployment’s name). There is **no default bind** — without the annotation, Eviction Guard does not scale. **Token order on the annotation is patch order** for entries with integer paths; the first *patched* path is the SpareReady primary (`actions[0]`). Put the Deployment capacity key first when you patch it (for example `deployment,hpa`). A single catalog entry may list **multiple integer paths** (for example HPA `minReplicas` and `maxReplicas`); each path gets its own Window action and baseline. An entry may omit patches entirely for an **external** scaler (Window + metrics only) — see [KEDA](keda.md).
 
