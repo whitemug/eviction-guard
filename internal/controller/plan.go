@@ -125,6 +125,7 @@ func uniqueStrings(in []string) []string {
 
 func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName string) (bool, error) {
 	scaled := false
+	var applied [][]scaleStep
 	// Walk steps top-to-bottom. Consecutive paths on the same object are one
 	// merge patch (list order preserved; no reordering).
 	for i := 0; i < len(p.steps); {
@@ -141,6 +142,7 @@ func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName strin
 		for _, s := range group {
 			current, err := backends.Current(ctx, c, s.target)
 			if err != nil {
+				_ = compensateApply(ctx, c, applied)
 				return scaled, wrapBackendErr(s.target, err)
 			}
 			path := s.target.FieldPath
@@ -158,11 +160,14 @@ func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName strin
 				}
 			}
 		}
+		mutated := false
 		if len(values) > 0 {
 			base := group[0].target
 			if err := backends.PatchIntegers(ctx, c, base, paths, values); err != nil {
+				_ = compensateApply(ctx, c, applied)
 				return scaled, wrapBackendErr(base, err)
 			}
+			mutated = true
 			if raised {
 				metrics.ScaleActions.WithLabelValues(policyName, "up", metricBackend(group[0]), "ok").Inc()
 				scaled = true
@@ -170,12 +175,59 @@ func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName strin
 		}
 		if len(stamp) > 0 {
 			if err := backends.PatchAnnotations(ctx, c, group[0].target, stamp); err != nil {
+				if mutated {
+					applied = append(applied, group)
+				}
+				_ = compensateApply(ctx, c, applied)
 				return scaled, wrapBackendErr(group[0].target, err)
 			}
+			mutated = true
+		}
+		if mutated {
+			applied = append(applied, group)
 		}
 		i = j
 	}
 	return scaled, nil
+}
+
+// compensateApply best-effort restores groups successfully patched earlier in this
+// apply call (reverse order) so a mid-fan-out failure does not leave partial capacity.
+func compensateApply(ctx context.Context, c client.Client, groups [][]scaleStep) error {
+	var first error
+	for i := len(groups) - 1; i >= 0; i-- {
+		if err := restoreApplyGroup(ctx, c, groups[i]); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func restoreApplyGroup(ctx context.Context, c client.Client, group []scaleStep) error {
+	if len(group) == 0 {
+		return nil
+	}
+	target := group[0].target
+	var paths []string
+	values := map[string]int32{}
+	var stampKeys []string
+	for _, s := range group {
+		stampKeys = append(stampKeys, s.stampKeys...)
+		if s.skipDownscaling {
+			continue
+		}
+		paths = append(paths, s.target.FieldPath)
+		values[s.target.FieldPath] = s.baseline
+	}
+	if len(values) > 0 {
+		if err := backends.PatchIntegers(ctx, c, target, paths, values); err != nil {
+			return wrapBackendErr(target, err)
+		}
+	}
+	if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(uniqueStrings(stampKeys))); err != nil {
+		return wrapBackendErr(target, err)
+	}
+	return nil
 }
 
 func sameScaleObject(a, b backends.Target) bool {

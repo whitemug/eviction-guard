@@ -4,12 +4,13 @@ metadata:
   name: leader-election-role
   namespace: eviction-guard-system
 rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # controller-runtime defaults to Lease locks (no ConfigMaps).
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create", "patch"]

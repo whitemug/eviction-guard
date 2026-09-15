@@ -32,12 +32,39 @@ type Filter interface {
 }
 
 // FromSpec compiles the CRD NodeFilter into a Filter. Empty spec matches all nodes.
+// Label selectors and namePattern are validated once here; Matches reuses the compiled form.
 func FromSpec(spec egv1a1.NodeFilter) (Filter, error) {
-	return &specFilter{spec: spec}, nil
+	var include, exclude labels.Selector
+	if spec.LabelSelector != nil {
+		sel, err := metav1.LabelSelectorAsSelector(spec.LabelSelector)
+		if err != nil {
+			return nil, fmt.Errorf("labelSelector: %w", err)
+		}
+		include = sel
+	}
+	if spec.ExcludeLabelSelector != nil {
+		sel, err := metav1.LabelSelectorAsSelector(spec.ExcludeLabelSelector)
+		if err != nil {
+			return nil, fmt.Errorf("excludeLabelSelector: %w", err)
+		}
+		exclude = sel
+	}
+	if spec.NamePattern != "" {
+		if _, err := filepath.Match(spec.NamePattern, ""); err != nil {
+			return nil, fmt.Errorf("namePattern: %w", err)
+		}
+	}
+	return &specFilter{
+		spec:    spec,
+		include: include,
+		exclude: exclude,
+	}, nil
 }
 
 type specFilter struct {
-	spec egv1a1.NodeFilter
+	spec    egv1a1.NodeFilter
+	include labels.Selector
+	exclude labels.Selector
 }
 
 func (s *specFilter) Name() string { return "nodeFilter" }
@@ -47,24 +74,12 @@ func (s *specFilter) Matches(node *corev1.Node) (bool, error) {
 		return false, fmt.Errorf("node is nil")
 	}
 
-	if s.spec.LabelSelector != nil {
-		sel, err := metav1.LabelSelectorAsSelector(s.spec.LabelSelector)
-		if err != nil {
-			return false, fmt.Errorf("labelSelector: %w", err)
-		}
-		if !sel.Matches(labels.Set(node.Labels)) {
-			return false, nil
-		}
+	if s.include != nil && !s.include.Matches(labels.Set(node.Labels)) {
+		return false, nil
 	}
 
-	if s.spec.ExcludeLabelSelector != nil {
-		sel, err := metav1.LabelSelectorAsSelector(s.spec.ExcludeLabelSelector)
-		if err != nil {
-			return false, fmt.Errorf("excludeLabelSelector: %w", err)
-		}
-		if sel.Matches(labels.Set(node.Labels)) {
-			return false, nil
-		}
+	if s.exclude != nil && s.exclude.Matches(labels.Set(node.Labels)) {
+		return false, nil
 	}
 
 	if len(s.spec.Names) > 0 && !contains(s.spec.Names, node.Name) {

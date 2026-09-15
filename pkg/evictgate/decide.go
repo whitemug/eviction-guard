@@ -28,6 +28,7 @@ import (
 	"github.com/whitemug/eviction-guard/pkg/naming"
 	"github.com/whitemug/eviction-guard/pkg/policyown"
 	"github.com/whitemug/eviction-guard/pkg/signals"
+	"github.com/whitemug/eviction-guard/pkg/workload"
 )
 
 // Decision is the eviction admission outcome.
@@ -46,13 +47,17 @@ type Result struct {
 
 // Evaluate decides whether an Eviction of pod may proceed.
 //
+// c should be the controller-runtime manager client (mgr.GetClient()): List/Get
+// are served from the shared informer cache — do not introduce a second cache.
+//
 // Rules:
 //   - Non-opted-in pods: allow
 //   - No owning policy (pin missing / no selector match): allow
 //   - Node not vulnerable (filter miss / no signal): allow (even if a sibling window is open)
-//   - ForcedCool window: allow (fail-open after maxWindow)
+//   - ForcedCool window: allow (fail-open after maxWindow), including deferred/no-scale windows
 //   - SpareReady: allow only the lexicographically first at-risk pod (one at a time)
-//   - Otherwise: deny (controller must open/scale the window)
+//   - No window yet (brief race before policy opens deferred or scaling window): deny
+//   - Otherwise: deny (waiting for spare, or deferred window still within maxWindow)
 func Evaluate(ctx context.Context, c client.Client, pod *corev1.Pod) (Result, error) {
 	if pod == nil {
 		return Result{Allow, ""}, nil
@@ -64,7 +69,7 @@ func Evaluate(ctx context.Context, c client.Client, pod *corev1.Pod) (Result, er
 		return Result{Allow, "unscheduled"}, nil
 	}
 
-	dep, err := ownerDeployment(ctx, c, pod)
+	dep, err := workload.OwnerDeployment(ctx, c, pod)
 	if err != nil {
 		return Result{}, err
 	}
@@ -153,6 +158,7 @@ func templateOptedIn(dep *appsv1.Deployment) bool {
 }
 
 func listPolicies(ctx context.Context, c client.Client) ([]*egv1a1.EvictionGuardPolicy, error) {
+	// Cache-backed when c is mgr.GetClient() (webhook + controllers share informers).
 	list := &egv1a1.EvictionGuardPolicyList{}
 	if err := c.List(ctx, list); err != nil {
 		return nil, err
@@ -192,33 +198,6 @@ func activeWindowFor(ctx context.Context, c client.Client, dep *appsv1.Deploymen
 	}
 	if win.IsActive() || win.Status.ForcedCool {
 		return win, nil
-	}
-	return nil, nil
-}
-
-func ownerDeployment(ctx context.Context, c client.Client, pod *corev1.Pod) (*appsv1.Deployment, error) {
-	var rsName string
-	for _, ref := range pod.OwnerReferences {
-		if ref.Kind == "ReplicaSet" && ref.Controller != nil && *ref.Controller {
-			rsName = ref.Name
-			break
-		}
-	}
-	if rsName == "" {
-		return nil, nil
-	}
-	rs := &appsv1.ReplicaSet{}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: rsName}, rs); err != nil {
-		return nil, client.IgnoreNotFound(err)
-	}
-	for _, ref := range rs.OwnerReferences {
-		if ref.Kind == "Deployment" && ref.Controller != nil && *ref.Controller {
-			dep := &appsv1.Deployment{}
-			if err := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, dep); err != nil {
-				return nil, client.IgnoreNotFound(err)
-			}
-			return dep, nil
-		}
 	}
 	return nil, nil
 }

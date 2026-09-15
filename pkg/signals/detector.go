@@ -11,6 +11,8 @@ See LICENSE in the project root for license information.
 package signals
 
 import (
+	"sync"
+
 	corev1 "k8s.io/api/core/v1"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
@@ -30,7 +32,10 @@ type Detector interface {
 	Vulnerable(node *corev1.Node) bool
 }
 
-var registry = map[egv1a1.DisruptionSignal]Detector{}
+var (
+	registryMu sync.RWMutex
+	registry   = map[egv1a1.DisruptionSignal]Detector{}
+)
 
 func init() {
 	Register(karpenterDisrupted{})
@@ -40,13 +45,18 @@ func init() {
 	Register(nodeCordoned{})
 }
 
-// Register adds or replaces a detector. Safe to call from plugin init().
+// Register adds or replaces a detector. Safe for concurrent use (e.g. plugin init
+// racing with IsVulnerable during tests or late registration).
 func Register(d Detector) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	registry[d.Name()] = d
 }
 
 // Lookup returns a registered detector.
 func Lookup(name egv1a1.DisruptionSignal) (Detector, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	d, ok := registry[name]
 	return d, ok
 }
@@ -68,6 +78,8 @@ func IsVulnerable(node *corev1.Node, wanted []egv1a1.DisruptionSignal) bool {
 	if len(wanted) == 0 {
 		wanted = DefaultSignals()
 	}
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	for _, name := range wanted {
 		d, ok := registry[name]
 		if !ok {
@@ -85,6 +97,8 @@ func Reasons(node *corev1.Node, wanted []egv1a1.DisruptionSignal) []egv1a1.Disru
 	if len(wanted) == 0 {
 		wanted = DefaultSignals()
 	}
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	var out []egv1a1.DisruptionSignal
 	for _, name := range wanted {
 		d, ok := registry[name]

@@ -53,6 +53,7 @@ spec:
             - --leader-elect={{ .Values.leaderElect }}
             - --health-probe-bind-address={{ .Values.healthProbe.bindAddress }}
             - --metrics-bind-address={{ .Values.metrics.bindAddress }}
+            - --webhook-enabled={{ .Values.webhook.enabled }}
             {{- if .Values.webhook.enabled }}
             - --webhook-cert-dir=/tmp/k8s-webhook-server/serving-certs
             {{- end }}

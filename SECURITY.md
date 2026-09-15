@@ -25,9 +25,20 @@ Eviction Guard is a cluster-scoped operator. It can patch Deployments and HPAs (
 
 Cross-namespace capacity mutation is **supported and intentional**: a protected Deployment may set `eviction-guard.io/scale-backend` to `key=ns/name` (for example `hpa=platform/web-hpa`) so Eviction Guard patches capacity in another namespace. There is no same-namespace deny in the operator. Isolation is an ops / RBAC concern — who may create Policies, who may annotate Deployments, and how ClusterRole patch rights are scoped. See [docs/configure.md](docs/configure.md).
 
-With `webhook.failurePolicy: Fail` (Helm default), a webhook outage blocks voluntary drains of opted-in pods until the webhook recovers. That is intentional; do not set `Ignore` unless you accept cold drains during outages. See [docs/howto.md](docs/howto.md).
+With `webhook.evictionFailurePolicy: Fail` (Helm default), a webhook outage rejects **every** `pods/eviction` CREATE cluster-wide until the webhook recovers — not only opted-in pods. That is intentional; do not set `Ignore` unless you accept cold drains during outages. Deployment annotation checks default to `Ignore`. See [docs/howto.md](docs/howto.md) and [docs/install.md](docs/install.md).
 
-The manager metrics endpoint (default `:8080`) is plaintext and unauthenticated. Restrict access with NetworkPolicy (or bind to localhost and scrape via a sidecar) on multi-tenant clusters.
+The manager metrics endpoint (default `:8080`) is plaintext and unauthenticated. The Helm chart ships a metrics ClusterIP Service (`metrics.service.enabled`, default true). Restrict access with `networkPolicy.enabled=true` (or bind to localhost and scrape via a sidecar) on multi-tenant clusters.
+
+## Webhook TLS expiry
+
+Helm self-signed webhook certs live in Secret `eviction-guard-webhook-certs` and are **reused** across upgrades. They expire after `webhook.certDurationDays` (default 365). Monitor Secret / Certificate notAfter, or calendar a rotation before expiry:
+
+```bash
+kubectl delete secret -n eviction-guard-system eviction-guard-webhook-certs
+helm upgrade --install eviction-guard ...
+```
+
+Prefer `webhook.certManager.enabled=true` (or the Kustomize `config/certmanager` path) for automated rotation. See [UPGRADING.md](UPGRADING.md).
 
 ## Signed releases
 

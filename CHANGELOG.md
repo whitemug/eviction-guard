@@ -4,6 +4,33 @@ All notable changes to this project are documented here. Versions follow [SemVer
 
 ## [Unreleased]
 
+### Added
+
+- Deferred disruption windows when `maxConcurrentWindows` is hit: lightweight no-scale windows that still arm `maxWindow` / `ForcedCool` so drains fail-open instead of denying forever without a clock.
+- Split webhook `failurePolicy` knobs (`evictionFailurePolicy` default `Fail`, `deploymentFailurePolicy` default `Ignore`) with clear docs that eviction Fail is cluster-wide.
+- Optional Helm metrics Service / NetworkPolicy; `webhook.certManager.enabled` path; chart `NOTES.txt`.
+- Ready probes wait for cache sync (and webhook server when enabled).
+- Release: Trivy scan of a local amd64 image **before** push; SPDX SBOM (syft) attached to the GitHub Release. CI: `helm template | kubeconform`.
+- Design inventory for Target abstraction beyond Deployment: [docs/design-targets.md](docs/design-targets.md).
+
+### Changed
+
+- Window create / patch happens **before** capacity scale-up (avoids orphaned replicas with no window / ForcedCool clock).
+- Shared `pkg/workload.OwnerDeployment` for policy controller and eviction gate.
+- `scaleBackAndClose` no longer double-calls restore (single restore via `scaleBackAndUnfinalize`).
+- Eviction webhook falls back to request metadata only when `Object.raw` is empty; logs the original decode error.
+- Signals registry uses `sync.RWMutex`; `IsActive` empty-phase behavior documented in API godoc.
+- Makefile `test-unit` skips generate/manifests for a faster local loop.
+
+### Fixed
+
+- Indexed pod list errors no longer fall back to cluster-wide Pod lists.
+- RBAC grants `events.k8s.io` Events for controller-runtime 0.25 recorders.
+- E2E pins `replicaCount=1` with `leaderElect=false`.
+- `--webhook-enabled=true` requires `--webhook-cert-dir` (fail-fast).
+- Helm CRD upgrade steps documented (`UPGRADING.md` / install).
+- Kustomize manager defaults aligned to 2 replicas + PDB.
+
 ## [0.2.2] — 2026-09-13
 
 ### Added

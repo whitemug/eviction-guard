@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: eviction-guard-controller-manager
+  namespace: eviction-guard-system
+  labels:
+    app.kubernetes.io/name: eviction-guard
+    control-plane: controller-manager
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: eviction-guard

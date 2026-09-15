@@ -9,6 +9,7 @@ package backends_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -167,5 +168,66 @@ func TestPatchAnnotationsOnCRD(t *testing.T) {
 	v, _, _ = unstructured.NestedInt64(got.Object, "spec", "replicas")
 	if v != 2 {
 		t.Fatalf("replicas=%d after scale-down", v)
+	}
+}
+
+func TestCurrentDefaultWhenUnset(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"},
+		Spec:       appsv1.DeploymentSpec{}, // replicas unset
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dep).Build()
+
+	cur, err := backends.Current(context.Background(), c, backends.Target{
+		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "web"},
+		APIVersion: "apps/v1", Kind: "Deployment", FieldPath: "spec.replicas",
+	})
+	if err != nil || cur != 1 {
+		t.Fatalf("Deployment unset Current=%d err=%v, want 1", cur, err)
+	}
+
+	widget := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "example.com/v1",
+		"kind":       "Widget",
+		"metadata":   map[string]interface{}{"name": "w", "namespace": "app"},
+		"spec":       map[string]interface{}{},
+	}}
+	c2 := fake.NewClientBuilder().WithScheme(runtime.NewScheme()).WithObjects(widget).Build()
+	_, err = backends.Current(context.Background(), c2, backends.Target{
+		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "w"},
+		APIVersion: "example.com/v1", Kind: "Widget", FieldPath: "spec.replicas",
+	})
+	if err == nil || !strings.Contains(err.Error(), "defaultWhenUnset") {
+		t.Fatalf("err=%v, want defaultWhenUnset required", err)
+	}
+	def := int32(7)
+	cur, err = backends.Current(context.Background(), c2, backends.Target{
+		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "w"},
+		APIVersion: "example.com/v1", Kind: "Widget", FieldPath: "spec.replicas",
+		DefaultWhenUnset: &def,
+	})
+	if err != nil || cur != 7 {
+		t.Fatalf("Current=%d err=%v, want 7", cur, err)
+	}
+}
+
+func TestCurrentInt32Bounds(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "example.com/v1",
+		"kind":       "Widget",
+		"metadata":   map[string]interface{}{"name": "w", "namespace": "app"},
+		"spec":       map[string]interface{}{"replicas": int64(1 << 40)},
+	}}
+	c := fake.NewClientBuilder().WithScheme(runtime.NewScheme()).WithObjects(obj).Build()
+	_, err := backends.Current(context.Background(), c, backends.Target{
+		ObjectKey:  client.ObjectKey{Namespace: "app", Name: "w"},
+		APIVersion: "example.com/v1", Kind: "Widget", FieldPath: "spec.replicas",
+	})
+	if err == nil || !strings.Contains(err.Error(), "int32") {
+		t.Fatalf("err=%v, want int32 range", err)
 	}
 }

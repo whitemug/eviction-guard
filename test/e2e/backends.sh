@@ -568,6 +568,7 @@ helm upgrade --install eviction-guard "$ROOT/charts/eviction-guard" \
   --set image.tag="${IMG##*:}" \
   --set image.pullPolicy=IfNotPresent \
   --set leaderElect=false \
+  --set replicaCount=1 \
   "${HELM_EXTRA[@]}" \
   --wait --timeout 3m
 

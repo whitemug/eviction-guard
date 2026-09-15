@@ -416,6 +416,7 @@ helm upgrade --install eviction-guard "$ROOT/charts/eviction-guard" \
   --set image.tag="${IMG##*:}" \
   --set image.pullPolicy=IfNotPresent \
   --set leaderElect=false \
+  --set replicaCount=1 \
   --wait --timeout 3m
 
 wait_ok "manager ready" 120 \

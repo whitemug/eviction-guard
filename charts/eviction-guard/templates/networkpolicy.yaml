@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "eviction-guard.fullname" . }}
+  labels:
+    {{- include "eviction-guard.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "eviction-guard.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      control-plane: controller-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    # Health probes (kubelet) and metrics scrapers.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.healthProbe.port }}
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+    {{- if .Values.webhook.enabled }}
+    # API server → validating webhook.
+    - ports:
+        - protocol: TCP
+          port: 9443
+    {{- end }}
+{{- end }}

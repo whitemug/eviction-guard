@@ -23,7 +23,7 @@ spec:
     zones: ["us-east-1a"]          # optional
     namePattern: "ip-10-0-*"       # optional glob
   spareReplicas: 1
-  maxBuffer: 4
+  maxBuffer: 4                     # 0 = unlimited (not “zero extra”)
   maxConcurrentWindows: 8          # 0 = unlimited
   maxWindow: 2h                    # 0 = unlimited; ForcedCool fail-open (tune shorter for Spot, e.g. 15m)
   backends:
@@ -78,9 +78,11 @@ Do not rename a policy while its windows are Open — Kubernetes replace is dele
 | Field | Meaning |
 |---|---|
 | `spareReplicas` | Extra replicas per window (clamped by `maxBuffer`) |
-| `maxConcurrentWindows` | Cap Open/Cooling windows; extras wait (eviction still denied until a window + spare) |
+| `maxBuffer` | Cap on extras added in one scale-up. Default **4**. Explicit **0 = unlimited** (same idea as `maxWindow`), not “add zero” |
+| `maxConcurrentWindows` | Cap non-deferred Open/Cooling windows; extras get a lightweight **deferred** window (no scale) that still arms `maxWindow` / `ForcedCool` |
 | `maxWindow` | Force-cool Open windows that last this long (`ForcedCool` → webhook allows eviction). Default **2h**; Spot drains often use **10–15m** so a stuck capacity apply does not look like a hard block |
 | `backends.<key>.skipDownscaling` | Raise on disruption; leave integer paths at `ScaledTo` on close (stamps still cleared). Prefer scaler floors; use mainly on Deployment if you still bind it |
+| `backends.<key>.defaultWhenUnset` | Integer `Current` returns when the path is missing. Optional for Deployment/HPA (default **1**); required for other catalog kinds |
 | `scaleBackAfter` | Cooling duration after scale-back |
 | `backends` | Named catalog: key → apiVersion/kind/patches (include `deployment` + `hpa` in examples) |
 

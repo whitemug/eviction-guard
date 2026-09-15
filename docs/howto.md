@@ -42,7 +42,7 @@ The hard gate is a validating webhook on **`pods/eviction`** (what `kubectl drai
 |---|---|
 | Pod not `protected` | Allow |
 | Node not vulnerable / no matching policy | Allow |
-| Vulnerable, no window or `SpareReady=false` | **Deny** (policy should be scaling; deferred workloads stay denied until a slot opens) |
+| Vulnerable, no window or `SpareReady=false` | **Deny** (policy should be scaling; deferred windows deny until spare or `maxWindow` ForcedCool) |
 | `SpareReady=true` | Allow the **lexicographically first** at-risk pod name; deny others until it is gone |
 | `status.forcedCool` (`maxWindow`) | Allow (fail-open after the cap) |
 
@@ -52,7 +52,7 @@ Constants and decision logic: `pkg/evictgate`.
 
 ### Webhook outage
 
-With `failurePolicy: Fail` (default), if the webhook is unreachable, **Eviction of opted-in pods fails**. Drains stick until the webhook recovers. Prefer fixing the webhook over setting `Ignore` unless you accept cold evictions during outages.
+With `webhook.evictionFailurePolicy: Fail` (default), if the webhook is unreachable, **every `pods/eviction` CREATE is rejected** (cluster-wide), not only opted-in pods. Drains stick until the webhook recovers. Prefer fixing the webhook over setting `Ignore` unless you accept cold evictions during outages. Deployment annotation checks default to `Ignore`.
 
 Disable only with full awareness:
 
@@ -165,8 +165,8 @@ See [KEDA](keda.md): either patch `ScaledObject.spec.minReplicaCount`, or declar
 | Drain stuck / no spare | Webhook up? `SpareReady`? `CapacityApplied`? `maxWindow` / `ForcedCool`? Image pull / scheduling? |
 | Scale thrash with GitOps | Argo/Flux reverting replicas — see [GitOps](gitops.md) |
 | Scale on every cordon | Narrow `nodeFilter`, or omit `NodeCordoned` from an explicit `disruptionSignals` list |
-| Eviction allowed with no spare | Webhook disabled? `failurePolicy: Ignore`? Pod not using Eviction API (`delete`)? |
-| Deferred workloads never scale | `maxConcurrentWindows`; eviction stays denied until a window slot frees |
+| Eviction allowed with no spare | Webhook disabled? `evictionFailurePolicy: Ignore`? Pod not using Eviction API (`delete`)? |
+| Deferred workloads never scale | `maxConcurrentWindows`; deferred windows open without scale and fail-open after `maxWindow` |
 | Double reconcile / flapping | `leaderElect: false` with multiple replicas? |
 
 Metrics: see [Metrics](metrics.md). Events on windows/policies: `ScaledUp`, `SpareReady`, `ScaleUpFailed`, `MaxWindowExceeded`, `ScaledBack`.

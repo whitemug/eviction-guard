@@ -195,9 +195,8 @@ func applySpareStatus(win *egv1a1.EvictionGuardWindow, ready, safe int32, now me
 
 func (r *WindowReconciler) workloadToWindows(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &egv1a1.EvictionGuardWindowList{}
-	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace()), client.MatchingLabels{
-		egv1a1.WorkloadNameLabel: obj.GetName(),
-	}); err != nil {
+	key := workloadIndexKey(obj.GetNamespace(), obj.GetName())
+	if err := r.List(ctx, list, client.MatchingFields{IndexWindowWorkload: key}); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(list.Items))
@@ -233,9 +232,8 @@ func (r *WindowReconciler) podToWindows(ctx context.Context, obj client.Object) 
 		return nil
 	}
 	list := &egv1a1.EvictionGuardWindowList{}
-	if err := r.List(ctx, list, client.InNamespace(pod.Namespace), client.MatchingLabels{
-		egv1a1.WorkloadNameLabel: deployName,
-	}); err != nil {
+	key := workloadIndexKey(pod.Namespace, deployName)
+	if err := r.List(ctx, list, client.MatchingFields{IndexWindowWorkload: key}); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(list.Items))

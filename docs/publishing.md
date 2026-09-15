@@ -50,8 +50,9 @@ Artifacts may still be **private** on GHCR even when the git repo is public — 
 ### Pre-tag reminders
 
 - Metrics bind to `:8080` with no auth — document NetworkPolicy for hardened clusters.
-- Helm webhook TLS Secret is sticky across upgrades (`lookup`); deleting the Secret (or using cert-manager) is how you rotate.
-- Eviction + Deployment validating webhooks are cluster-scoped (no namespace selector by default).
+- Helm webhook TLS Secret is sticky across upgrades (`lookup`); delete the Secret then `helm upgrade` to rotate, or use `webhook.certManager.enabled` / `config/certmanager`.
+- Eviction + Deployment validating webhooks are cluster-scoped (no namespace selector by default). Per-webhook failure policies: eviction/policy default `Fail`, deployment default `Ignore`.
+- Helm 3 does not upgrade chart `crds/` — `kubectl apply` CRDs on schema changes ([UPGRADING.md](../UPGRADING.md)).
 
 Install:
 

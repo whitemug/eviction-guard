@@ -61,6 +61,39 @@ func defaultCatalogBackends() map[string]egv1a1.BackendCatalogEntry {
 	}
 }
 
+// withControllerIndexes registers field indexes used by policy/window reconciles.
+func withControllerIndexes(b *fake.ClientBuilder) *fake.ClientBuilder {
+	return b.
+		WithIndex(&corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
+			n := o.(*corev1.Pod).Spec.NodeName
+			if n == "" {
+				return nil
+			}
+			return []string{n}
+		}).
+		WithIndex(&egv1a1.EvictionGuardWindow{}, IndexWindowPolicyName, func(o client.Object) []string {
+			name := o.(*egv1a1.EvictionGuardWindow).Spec.PolicyName
+			if name == "" {
+				return nil
+			}
+			return []string{name}
+		}).
+		WithIndex(&egv1a1.EvictionGuardWindow{}, IndexWindowWorkload, func(o client.Object) []string {
+			w := o.(*egv1a1.EvictionGuardWindow)
+			ns, name := w.Spec.Target.Namespace, w.Spec.Target.Name
+			if ns == "" {
+				ns = w.Namespace
+			}
+			if name == "" {
+				return nil
+			}
+			return []string{workloadIndexKey(ns, name)}
+		}).
+		WithIndex(&egv1a1.EvictionGuardWindow{}, IndexWindowVulnerableNode, func(o client.Object) []string {
+			return append([]string(nil), o.(*egv1a1.EvictionGuardWindow).Spec.VulnerableNodes...)
+		})
+}
+
 func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) (client.Client, *PolicyReconciler, *WindowReconciler) {
 	t.Helper()
 	scheme := testScheme(t)
@@ -126,16 +159,9 @@ func fixture(t *testing.T, nodeLabels map[string]string, taints []corev1.Taint) 
 			Backends:      defaultCatalogBackends(),
 		},
 	}
-	c := fake.NewClientBuilder().
+	c := withControllerIndexes(fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{}).
-		WithIndex(&corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
-			n := o.(*corev1.Pod).Spec.NodeName
-			if n == "" {
-				return nil
-			}
-			return []string{n}
-		}).
+		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{})).
 		WithObjects(ns, dep, rs, pod, node, policy).
 		Build()
 
@@ -432,8 +458,8 @@ func TestWindowWaitsForSpareReadyBeforeCooldown(t *testing.T) {
 	if win.Status.Phase != egv1a1.WindowPhaseOpen {
 		t.Fatalf("phase=%s, want Open while waiting for spare", win.Status.Phase)
 	}
-	if res.RequeueAfter != 15*time.Second {
-		t.Fatalf("requeue=%s, want 15s", res.RequeueAfter)
+	if res.RequeueAfter != requeueOpen {
+		t.Fatalf("requeue=%s, want %s", res.RequeueAfter, requeueOpen)
 	}
 
 	putSafeReadyPods(t, c, 3)
@@ -760,6 +786,7 @@ func TestWindowOpensDespiteCapacityApplyFailure(t *testing.T) {
 			NodeFilter:    egv1a1.NodeFilter{CapacityTypes: []string{"spot"}},
 			SpareReplicas: ptr.To(int32(1)),
 			MaxBuffer:     ptr.To(int32(4)),
+			MaxWindow:     &metav1.Duration{Duration: 30 * time.Minute},
 			Backends:      defaultCatalogBackends(),
 		},
 	}
@@ -774,16 +801,9 @@ func TestWindowOpensDespiteCapacityApplyFailure(t *testing.T) {
 		Status: autoscalingv1.HorizontalPodAutoscalerStatus{CurrentReplicas: 3, DesiredReplicas: 3},
 	}
 
-	base := fake.NewClientBuilder().
+	base := withControllerIndexes(fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{}).
-		WithIndex(&corev1.Pod{}, IndexPodNodeName, func(o client.Object) []string {
-			n := o.(*corev1.Pod).Spec.NodeName
-			if n == "" {
-				return nil
-			}
-			return []string{n}
-		}).
+		WithStatusSubresource(&egv1a1.EvictionGuardPolicy{}, &egv1a1.EvictionGuardWindow{}, &appsv1.Deployment{}, &autoscalingv1.HorizontalPodAutoscaler{})).
 		WithObjects(ns, dep, rs, pod, node, policy, hpa).
 		Build()
 
@@ -816,6 +836,19 @@ func TestWindowOpensDespiteCapacityApplyFailure(t *testing.T) {
 	}
 	if !strings.Contains(win.Status.Message, "maxWindow") {
 		t.Fatalf("window message should keep apply failure hint: %q", win.Status.Message)
+	}
+
+	// CapacityApplied=False must still ForcedCool after maxWindow (D3 fail-open).
+	opened := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	wr.Now = func() time.Time { return opened.Add(30 * time.Minute) }
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: winName}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: winName}, win); err != nil {
+		t.Fatal(err)
+	}
+	if !win.Status.ForcedCool {
+		t.Fatalf("CapacityApplied=False must ForcedCool after maxWindow, phase=%s", win.Status.Phase)
 	}
 }
 
@@ -1257,8 +1290,16 @@ func TestPolicyCapsNewWindows(t *testing.T) {
 	if *web.Spec.Replicas != 3 {
 		t.Fatalf("web replicas=%d, want 3 (deferred)", *web.Spec.Replicas)
 	}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, &egv1a1.EvictionGuardWindow{}); err == nil {
-		t.Fatal("web should not have a window")
+	webWin := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, webWin); err != nil {
+		t.Fatalf("web should have a deferred window: %v", err)
+	}
+	if !isDeferredWindow(webWin) {
+		t.Fatalf("web window labels=%v, want deferred", webWin.Labels)
+	}
+	if webWin.Spec.ScaledTo != webWin.Spec.Baseline || len(webWin.ScaleActions()) != 0 {
+		t.Fatalf("deferred window must not scale: baseline=%d scaledTo=%d actions=%d",
+			webWin.Spec.Baseline, webWin.Spec.ScaledTo, len(webWin.ScaleActions()))
 	}
 	p := &egv1a1.EvictionGuardPolicy{}
 	if err := c.Get(ctx, types.NamespacedName{Name: "spot-workers"}, p); err != nil {
@@ -1314,6 +1355,13 @@ func TestPolicyUpdatesExistingWindowAtCap(t *testing.T) {
 	if *web.Spec.Replicas != 3 {
 		t.Fatalf("web replicas=%d, want 3 still deferred", *web.Spec.Replicas)
 	}
+	webWin := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, webWin); err != nil {
+		t.Fatal(err)
+	}
+	if !isDeferredWindow(webWin) {
+		t.Fatalf("web should stay deferred, labels=%v", webWin.Labels)
+	}
 }
 
 func TestPolicyOpensNextWindowAfterSlotFrees(t *testing.T) {
@@ -1353,6 +1401,63 @@ func TestPolicyOpensNextWindowAfterSlotFrees(t *testing.T) {
 	}
 	if *web.Spec.Replicas != 4 {
 		t.Fatalf("web replicas=%d, want 4 after a slot freed", *web.Spec.Replicas)
+	}
+	webWin := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}, webWin); err != nil {
+		t.Fatal(err)
+	}
+	if isDeferredWindow(webWin) {
+		t.Fatal("web window should be promoted off deferred after a slot freed")
+	}
+	if webWin.Spec.ScaledTo != 4 {
+		t.Fatalf("web ScaledTo=%d, want 4", webWin.Spec.ScaledTo)
+	}
+}
+
+func TestDeferredWindowForceCoolsWithoutScale(t *testing.T) {
+	c, pr, wr := fixture(t, map[string]string{"karpenter.sh/capacity-type": "spot"}, []corev1.Taint{
+		{Key: signals.TaintKarpenterDisrupted, Effect: corev1.TaintEffectNoSchedule},
+	})
+	ctx := context.Background()
+	addOptedInWorkload(t, c, "api")
+	setWindowCap(t, c, 1)
+	p := &egv1a1.EvictionGuardPolicy{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "spot-workers"}, p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.MaxWindow = &metav1.Duration{Duration: 30 * time.Minute}
+	if err := c.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "spot-workers"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	winNN := types.NamespacedName{Namespace: "app", Name: WindowName("spot-workers", "app", "web")}
+	win := &egv1a1.EvictionGuardWindow{}
+	if err := c.Get(ctx, winNN, win); err != nil {
+		t.Fatal(err)
+	}
+	if !isDeferredWindow(win) {
+		t.Fatal("expected deferred web window")
+	}
+	opened := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	wr.Now = func() time.Time { return opened.Add(30 * time.Minute) }
+	if _, err := wr.Reconcile(ctx, ctrl.Request{NamespacedName: winNN}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, winNN, win); err != nil {
+		t.Fatal(err)
+	}
+	if !win.Status.ForcedCool {
+		t.Fatalf("deferred window must ForcedCool after maxWindow, phase=%s", win.Status.Phase)
+	}
+	web := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app", Name: "web"}, web); err != nil {
+		t.Fatal(err)
+	}
+	if *web.Spec.Replicas != 3 {
+		t.Fatalf("deferred ForcedCool must not have scaled replicas, got %d", *web.Spec.Replicas)
 	}
 }
 

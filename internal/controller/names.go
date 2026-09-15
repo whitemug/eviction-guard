@@ -26,12 +26,3 @@ func sortedKeys(m map[string]struct{}) []string {
 	sort.Strings(out)
 	return out
 }
-
-func containsString(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}

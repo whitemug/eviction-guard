@@ -18,6 +18,11 @@ const (
 	// PolicyLabel is set on EvictionGuardWindow objects to identify the owning policy.
 	PolicyLabel = "eviction-guard.io/policy"
 
+	// DeferredLabel is "true" on Windows opened while maxConcurrentWindows is saturated.
+	// Those windows arm maxWindow/ForcedCool without capacity patches and do not consume
+	// a concurrent-window slot until promoted to a scaling window.
+	DeferredLabel = "eviction-guard.io/deferred"
+
 	// PolicyPinAnnotation on a Deployment forces that named EvictionGuardPolicy to own
 	// the workload. When set, ownership ignores namespaceSelector / workloadSelector
 	// (nodeFilter and disruption signals still apply). If the named policy does not

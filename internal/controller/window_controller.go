@@ -65,6 +65,7 @@ func (r *WindowReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;update;patch
 
 func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -118,7 +119,7 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		if len(still) > 0 {
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: requeueForcedCoolTombstone}, nil
 		}
 		return r.deleteClosedWindow(ctx, win)
 	}
@@ -216,7 +217,7 @@ func (r *WindowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 func openRequeue(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.EvictionGuardWindow, now time.Time) ctrl.Result {
-	res := ctrl.Result{RequeueAfter: 15 * time.Second}
+	res := ctrl.Result{RequeueAfter: requeueOpen}
 	if d := maxWindowRequeue(policy, win, now); d > 0 && d < res.RequeueAfter {
 		res.RequeueAfter = d
 	}
@@ -224,6 +225,7 @@ func openRequeue(policy *egv1a1.EvictionGuardPolicy, win *egv1a1.EvictionGuardWi
 }
 
 func (r *WindowReconciler) deleteClosedWindow(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
+	clearWorkloadPlanMetrics(win.Spec.PolicyName, win.Spec.Target.Namespace, win.Spec.Target.Name)
 	if controllerutil.ContainsFinalizer(win, egv1a1.WindowFinalizer) {
 		patch := client.MergeFrom(win.DeepCopy())
 		controllerutil.RemoveFinalizer(win, egv1a1.WindowFinalizer)
@@ -285,6 +287,7 @@ func (r *WindowReconciler) scaleBackAndUnfinalize(ctx context.Context, win *egv1
 	if err := restoreActions(ctx, r.Client, win); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
+	clearWorkloadPlanMetrics(win.Spec.PolicyName, win.Spec.Target.Namespace, win.Spec.Target.Name)
 	if controllerutil.ContainsFinalizer(win, egv1a1.WindowFinalizer) {
 		patch := client.MergeFrom(win.DeepCopy())
 		controllerutil.RemoveFinalizer(win, egv1a1.WindowFinalizer)
@@ -307,9 +310,7 @@ func (r *WindowReconciler) scaleBackIfAllowed(ctx context.Context, win *egv1a1.E
 }
 
 func (r *WindowReconciler) scaleBackAndClose(ctx context.Context, win *egv1a1.EvictionGuardWindow) (ctrl.Result, error) {
-	if err := restoreActions(ctx, r.Client, win); err != nil && !apierrors.IsNotFound(err) {
-		return ctrl.Result{}, err
-	}
+	// Restore once via scaleBackAndUnfinalize (do not restore here — that double-patched baselines).
 	return r.scaleBackAndUnfinalize(ctx, win)
 }
 
@@ -361,17 +362,19 @@ func windowMetricBackend(win *egv1a1.EvictionGuardWindow) string {
 }
 
 func (r *WindowReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := registerWindowIndexes(mgr); err != nil {
+		return err
+	}
+
 	mapNode := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 		list := &egv1a1.EvictionGuardWindowList{}
-		if err := r.List(ctx, list); err != nil {
+		if err := r.List(ctx, list, client.MatchingFields{IndexWindowVulnerableNode: obj.GetName()}); err != nil {
 			return nil
 		}
-		var reqs []reconcile.Request
+		reqs := make([]reconcile.Request, 0, len(list.Items))
 		for i := range list.Items {
 			w := &list.Items[i]
-			if containsString(w.Spec.VulnerableNodes, obj.GetName()) {
-				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}})
-			}
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}})
 		}
 		return reqs
 	})

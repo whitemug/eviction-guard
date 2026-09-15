@@ -23,6 +23,9 @@ type Target struct {
 	Kind       string
 	// FieldPath is the integer capacity field (default spec.replicas).
 	FieldPath string
+	// DefaultWhenUnset overrides Current when the path is missing. Nil uses
+	// kind defaults (Deployment/HPA → 1) or errors for unknown kinds.
+	DefaultWhenUnset *int32
 }
 
 // Field is the sole capacity mutator used by the controllers (unstructured merge-patch).

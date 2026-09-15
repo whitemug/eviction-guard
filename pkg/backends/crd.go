@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -33,8 +34,39 @@ func (b *fieldBackend) Current(ctx context.Context, c client.Client, t Target) (
 		return 0, err
 	}
 	if !ok {
+		return defaultWhenPathUnset(t)
+	}
+	return int64ToInt32(v, t)
+}
+
+func defaultWhenPathUnset(t Target) (int32, error) {
+	if t.DefaultWhenUnset != nil {
+		return *t.DefaultWhenUnset, nil
+	}
+	if knownDefaultOne(t.APIVersion, t.Kind) {
 		// Deployment.spec.replicas and HPA.spec.minReplicas default to 1 when unset.
 		return 1, nil
+	}
+	return 0, fmt.Errorf(
+		"%s %s path %q unset: set backends[].defaultWhenUnset (known Deployment/HPA default to 1)",
+		t.Kind, t.ObjectKey, t.FieldPath,
+	)
+}
+
+func knownDefaultOne(apiVersion, kind string) bool {
+	switch kind {
+	case "Deployment":
+		return apiVersion == "apps/v1"
+	case "HorizontalPodAutoscaler":
+		return apiVersion == "autoscaling/v1" || apiVersion == "autoscaling/v2"
+	default:
+		return false
+	}
+}
+
+func int64ToInt32(v int64, t Target) (int32, error) {
+	if v < math.MinInt32 || v > math.MaxInt32 {
+		return 0, fmt.Errorf("%s %s path %q value %d out of int32 range", t.Kind, t.ObjectKey, t.FieldPath, v)
 	}
 	return int32(v), nil
 }

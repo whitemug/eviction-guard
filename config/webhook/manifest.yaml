@@ -15,7 +15,7 @@ webhooks:
         namespace: eviction-guard-system
         path: /validate-apps-v1-deployment
         port: 443
-    failurePolicy: Fail
+    failurePolicy: Ignore
     matchPolicy: Equivalent
     sideEffects: None
     timeoutSeconds: 5

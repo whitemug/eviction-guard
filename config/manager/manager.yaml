@@ -15,9 +15,11 @@ metadata:
     app.kubernetes.io/name: eviction-guard
     control-plane: controller-manager
 spec:
-  # One replica is enough; leader election is already on (--leader-elect).
-  # Patch to 2 for HA. Helm: --set replicaCount=2 (see docs/install.md).
-  replicas: 1
+  # Two replicas so the validating webhook stays available during a rolling
+  # upgrade / node drain (eviction failurePolicy: Fail otherwise blocks ALL
+  # pods/eviction CREATE cluster-wide). Only the leader reconciles; standbys
+  # still serve the webhook. Patch to 1 for tiny/dev clusters.
+  replicas: 2
   selector:
     matchLabels:
       control-plane: controller-manager
@@ -41,6 +43,7 @@ spec:
           image: controller:latest
           args:
             - --leader-elect
+            - --webhook-enabled=true
             - --health-probe-bind-address=:8081
             - --metrics-bind-address=:8080
             - --webhook-cert-dir=/tmp/k8s-webhook-server/serving-certs
