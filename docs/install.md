@@ -30,7 +30,7 @@ kubectl apply -f examples/policy-spot.yaml
 kubectl apply -f examples/workload.yaml
 ```
 
-The chart does **not** create a policy by default. Apply `examples/` or enable `--set defaultPolicy.enabled=true`. Policy defaults: `maxConcurrentWindows: 8`, `maxWindow: 2h` (`0` = unlimited).
+The chart does **not** create a policy by default. Apply `examples/` or enable `--set defaultPolicy.enabled=true`. Policy defaults: `maxConcurrentWindows: 8`, `maxWindow: 2h` (`0` = unlimited — avoid unlimited `maxWindow` with a finite concurrent-window cap; see [configure](configure.md#capacity-knobs)).
 
 **Cluster singleton:** one install per cluster. Chart resource names do not include `Release.Name`; a second Helm release collides on ClusterRole / webhook configuration.
 
@@ -54,6 +54,8 @@ Verify signatures: [Publishing](publishing.md).
 Requires [cert-manager](https://cert-manager.io/) for webhook TLS (Helm generates certs itself, or set `webhook.certManager.enabled=true`).
 
 Default: **2 replicas** + PDB (`minAvailable: 1`), same Fail-webhook HA posture as Helm.
+
+**Parity note:** Kustomize matches Helm on manager replicas, PDB, and webhook failure policies. It does **not** ship the Helm chart's metrics Service (`metrics.service.enabled`) or NetworkPolicy (`networkPolicy.enabled`). Add those yourself (or scrape the pod IP / use a ServiceMonitor) if you need the same observability/hardening surface.
 
 ```bash
 make docker-build IMG=ghcr.io/whitemug/eviction-guard:dev

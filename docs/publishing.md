@@ -13,7 +13,7 @@ What is already in the tree versus what you do on GitHub when cutting a release 
 
 ## Current release state
 
-Prefer **`v0.2.3`** (or newer) for public install — deferred disruption windows under `maxConcurrentWindows`, window-before-scale ordering, split `evictionFailurePolicy` / `deploymentFailurePolicy` / `policyFailurePolicy`, optional metrics Service / NetworkPolicy, and chart default `replicaCount: 2` for webhook HA. Image and chart publish to GHCR and are Cosign-signed on tag.
+Prefer **`v0.2.3`** (or newer) for public install — deferred disruption windows under `maxConcurrentWindows`, window-before-scale ordering, split `evictionFailurePolicy` / `deploymentFailurePolicy` / `policyFailurePolicy`, Helm metrics Service + NetworkPolicy (both **default on**), and chart default `replicaCount: 2` for webhook HA. Image and chart publish to GHCR and are Cosign-signed on tag.
 Artifacts may still be **private** on GHCR even when the git repo is public — flip package visibility separately.
 
 ## Go public
@@ -27,9 +27,11 @@ Artifacts may still be **private** on GHCR even when the git repo is public — 
 4. Protect `main`: require PR + CI checks (`test`, `image / trivy`, `e2e`, `e2e-backends`); block force-push/delete.
 5. Optional: Artifact Hub listing (chart already carries `artifacthub.io/*` annotations; `prerelease: true` while API is `v1alpha1`).
 
-## Cut a new version (e.g. `v0.2.4`)
+## Cut a new version
 
-1. Bump in lockstep with the git tag (the release job fails if they drift):
+Example below uses **`v0.2.3`**; for a later cut, substitute the new version everywhere (Chart.yaml, values, kustomize `newTag`, CHANGELOG, tag name).
+
+1. Bump in lockstep with the git tag (the release job fails if Chart.yaml / `image.tag` drift; also keep `config/default/kustomization.yaml` `newTag` aligned manually):
    - `charts/eviction-guard/Chart.yaml` `version` and `appVersion`
    - `charts/eviction-guard/values.yaml` `image.tag`
    - `config/default/kustomization.yaml` `newTag` (keep samples aligned)
@@ -49,7 +51,7 @@ Artifacts may still be **private** on GHCR even when the git repo is public — 
 
 ### Pre-tag reminders
 
-- Metrics bind to `:8080` with no auth — document NetworkPolicy for hardened clusters.
+- Metrics bind to `:8080` with no auth — Helm defaults create a metrics Service and a port-only NetworkPolicy; tighten further for multi-tenant clusters.
 - Helm webhook TLS Secret is sticky across upgrades (`lookup`); delete the Secret then `helm upgrade` to rotate, or use `webhook.certManager.enabled` / `config/certmanager`.
 - Eviction + Deployment validating webhooks are cluster-scoped (no namespace selector by default). Per-webhook failure policies: eviction/policy default `Fail`, deployment default `Ignore`.
 - Helm 3 does not upgrade chart `crds/` — `kubectl apply` CRDs on schema changes ([UPGRADING.md](../UPGRADING.md)).
