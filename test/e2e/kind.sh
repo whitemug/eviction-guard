@@ -131,6 +131,43 @@ eviction_webhook_registered() {
   kubectl get validatingwebhookconfiguration -o yaml 2>/dev/null | grep -q 'pods/eviction'
 }
 
+# deploymentFailurePolicy defaults to Ignore: until the webhook answers, applies
+# are admitted. Probe until a known-bad scale-backend is actually denied.
+deployment_webhook_denying() {
+  local out rc
+  kubectl delete deploy web-bad --ignore-not-found >/dev/null 2>&1 || true
+  set +e
+  out="$(kubectl apply -f - <<'EOF' 2>&1
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-bad
+  annotations:
+    eviction-guard.io/scale-backend: "=missing-key"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-bad
+  template:
+    metadata:
+      labels:
+        app: web-bad
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.9
+EOF
+)"
+  rc=$?
+  set -e
+  if [[ "$rc" -eq 0 ]]; then
+    kubectl delete deploy web-bad --ignore-not-found >/dev/null 2>&1 || true
+    return 1
+  fi
+  echo "$out" | grep -qi "empty scale-backend key\|scale-backend"
+}
+
 # Must stay in bash: Ubuntu's /bin/sh is dash and does not implement [[.
 webhook_ready() {
   local ip
@@ -423,41 +460,9 @@ wait_ok "manager ready" 120 \
   kubectl wait --for=condition=available deploy -n eviction-guard-system -l control-plane=controller-manager --timeout=90s
 wait_ok "webhook endpoints" 60 webhook_ready
 wait_ok "eviction webhook registered" 30 eviction_webhook_registered
+wait_ok "deployment webhook denying" 90 deployment_webhook_denying
 
 echo "==> webhook rejects bad scale-backend syntax"
-set +e
-deny_out="$(kubectl apply -f - <<'EOF' 2>&1
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web-bad
-  annotations:
-    eviction-guard.io/scale-backend: "=missing-key"
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: web-bad
-  template:
-    metadata:
-      labels:
-        app: web-bad
-    spec:
-      containers:
-        - name: pause
-          image: registry.k8s.io/pause:3.9
-EOF
-)"
-deny_rc=$?
-set -e
-if [[ "$deny_rc" -eq 0 ]]; then
-  echo "expected webhook to deny web-bad" >&2
-  exit 1
-fi
-echo "$deny_out" | grep -qi "empty scale-backend key\|scale-backend" || {
-  echo "unexpected deny: $deny_out" >&2
-  exit 1
-}
 echo "ok  webhook denied invalid scale-backend"
 
 kubectl apply -f "$ROOT/test/e2e/policy.yaml"
