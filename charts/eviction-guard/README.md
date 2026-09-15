@@ -6,7 +6,7 @@ Proactive spare capacity and `pods/eviction` gating for predicted node disruptio
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.2 \
+  --version 0.2.3 \
   --namespace eviction-guard-system --create-namespace
 ```
 
@@ -29,7 +29,7 @@ Requires Kubernetes **1.27+**. The chart does not create a policy by default; ap
 | `webhook.certDurationDays` | `365` | Helm self-signed Secret reused on upgrade; delete Secret to reissue |
 | `webhook.certManager.enabled` | `false` | Use cert-manager Issuer+Certificate + CA inject instead of Helm genCA |
 | `metrics.service.enabled` | `true` | ClusterIP Service on the metrics port for scrape DX |
-| `networkPolicy.enabled` | `false` | Restrict ingress to health / metrics / webhook ports |
+| `networkPolicy.enabled` | `true` | Deny ingress to any port but health / metrics / webhook (port allow-list only, not source-restricted) |
 | `metrics.bindAddress` | `:8080` | Plaintext, unauthenticated — enable NetworkPolicy if needed |
 | `defaultPolicy.enabled` | `false` | Bare install does not watch the whole cluster |
 | `extraClusterRoleRules` | `[]` | Required for custom catalog backends that EVG patches (app CRs, KEDA Recipe A, …) |
@@ -42,7 +42,7 @@ See comments in [values.yaml](values.yaml). Common overrides:
 
 ```bash
 helm upgrade --install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.2 -n eviction-guard-system \
+  --version 0.2.3 -n eviction-guard-system \
   --set replicaCount=1 \
   --set resources.requests.memory=128Mi
 ```

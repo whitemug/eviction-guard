@@ -14,6 +14,8 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -45,4 +47,17 @@ func OwnerDeployment(ctx context.Context, c client.Client, pod *corev1.Pod) (*ap
 		}
 	}
 	return nil, nil
+}
+
+// NamespaceLabels returns the labels of the named Namespace, or an empty set
+// if it does not exist.
+func NamespaceLabels(ctx context.Context, c client.Client, name string) (labels.Set, error) {
+	ns := &corev1.Namespace{}
+	if err := c.Get(ctx, types.NamespacedName{Name: name}, ns); err != nil {
+		if apierrors.IsNotFound(err) {
+			return labels.Set{}, nil
+		}
+		return nil, err
+	}
+	return labels.Set(ns.Labels), nil
 }

@@ -22,7 +22,7 @@ Operator docs: [Overview](overview.md), [Configure](configure.md), [How-to](howt
    Karpenter / cloud / cordon
             │  node markers (early)
             ▼
-   Policy controller ──► scale backends ──► EvictionGuardWindow
+   Policy controller ──► EvictionGuardWindow ──► scale backends
             │
             ▼
    drain uses pods/eviction
@@ -43,6 +43,8 @@ Operator docs: [Overview](overview.md), [Configure](configure.md), [How-to](howt
 | Eviction webhook | Hard gate for voluntary Eviction |
 
 Signals **buy Ready time**. The webhook **sequences** drain. `protected` is membership only.
+
+The Window is created/patched **before** the capacity backends are mutated: a failed Create leaves no orphaned scale-up with no `maxWindow` clock, and a failed backend patch after that still has a Window to record `CapacityApplied=False` on and fail-open from.
 
 Empty `disruptionSignals` defaults include Karpenter markers, `OutOfService`, and `NodeCordoned`. See [signals](signals.md).
 

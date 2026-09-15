@@ -76,6 +76,41 @@ func TestCustomTaintAndLabel(t *testing.T) {
 	}
 }
 
+func TestMatchCustomAnnotationAndKeyValueEdgeCases(t *testing.T) {
+	sigs := []egv1a1.CustomDisruptionSignal{
+		{Name: "PresenceOnly", Annotation: &egv1a1.KeyValueMatch{Key: "cloud.example.com/draining"}},
+		{Name: "ExactValue", Annotation: &egv1a1.KeyValueMatch{Key: "cloud.example.com/phase", Value: "terminating"}},
+	}
+
+	if signals.MatchCustom(&corev1.Node{}, nil) {
+		t.Fatal("no configured signals must not match")
+	}
+	if signals.MatchCustom(&corev1.Node{}, sigs) {
+		t.Fatal("node with nil annotations must not match")
+	}
+
+	presentAnyValue := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Annotations: map[string]string{"cloud.example.com/draining": "whatever"},
+	}}
+	if !signals.MatchCustom(presentAnyValue, sigs) {
+		t.Fatal("key presence should be enough when Value is empty")
+	}
+
+	wrongValue := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Annotations: map[string]string{"cloud.example.com/phase": "running"},
+	}}
+	if signals.MatchCustom(wrongValue, sigs) {
+		t.Fatal("mismatched value must not match")
+	}
+
+	rightValue := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Annotations: map[string]string{"cloud.example.com/phase": "terminating"},
+	}}
+	if !signals.MatchCustom(rightValue, sigs) {
+		t.Fatal("exact value match should match")
+	}
+}
+
 func TestNodeCordonedIsDefault(t *testing.T) {
 	n := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "n1"},

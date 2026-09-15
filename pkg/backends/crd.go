@@ -79,14 +79,13 @@ func (b *fieldBackend) ScaleDown(ctx context.Context, c client.Client, t Target,
 	return b.patch(ctx, c, t, baseline)
 }
 
+// PatchIntegers applies one or more integer field values to base as a single
+// merge patch. A path with no entry in values is left untouched — callers
+// (plan.go) rely on this to patch only the paths in a same-object group that
+// actually need to change.
 func (b *fieldBackend) PatchIntegers(ctx context.Context, c client.Client, base Target, paths []string, values map[string]int32) error {
 	if len(paths) == 0 {
 		return nil
-	}
-	if len(paths) == 1 {
-		t := base
-		t.FieldPath = paths[0]
-		return b.patch(ctx, c, t, values[paths[0]])
 	}
 	obj, _, err := b.get(ctx, c, base)
 	if err != nil {

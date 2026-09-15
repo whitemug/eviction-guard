@@ -43,6 +43,24 @@ type TaintMatch struct {
 	Effect corev1.TaintEffect `json:"effect,omitempty"`
 }
 
+// MatchesAny reports whether any taint in the list satisfies this match (Key
+// required, Value/Effect optional additional constraints).
+func (t TaintMatch) MatchesAny(taints []corev1.Taint) bool {
+	for _, tt := range taints {
+		if tt.Key != t.Key {
+			continue
+		}
+		if t.Value != "" && tt.Value != t.Value {
+			continue
+		}
+		if t.Effect != "" && tt.Effect != t.Effect {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // KeyValueMatch matches a node label or annotation. Key is required.
 // If Value is empty, presence of the key is enough.
 type KeyValueMatch struct {

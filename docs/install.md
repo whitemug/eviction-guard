@@ -15,7 +15,7 @@ Tagged release:
 
 ```bash
 helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.2 \
+  --version 0.2.3 \
   --namespace eviction-guard-system --create-namespace
 kubectl apply -f examples/policy-spot.yaml
 kubectl apply -f examples/workload.yaml
@@ -66,11 +66,11 @@ Point `config/default/kustomization.yaml` `images` at the image you built.
 
 ## HA and resources
 
-Default: **`replicaCount: 2`** (webhook HA under eviction `failurePolicy: Fail`), leader election on. Override with `--set replicaCount=1` for tiny/dev clusters.
+Default: **`replicaCount: 2`** (webhook HA under `evictionFailurePolicy: Fail`), leader election on. Override with `--set replicaCount=1` for tiny/dev clusters.
 
 ```bash
 helm upgrade --install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \
-  --version 0.2.2 \
+  --version 0.2.3 \
   --namespace eviction-guard-system --create-namespace
 # optional: --set replicaCount=1
 ```
@@ -96,9 +96,9 @@ Defaults match [restricted](https://kubernetes.io/docs/concepts/security/pod-sec
 | `webhook.policyFailurePolicy` | `Fail` |
 | `webhook.timeoutSeconds` | `5` |
 | `webhook.certDurationDays` | `365` (Secret reused on upgrade — delete Secret to reissue, or `webhook.certManager.enabled`) |
-| `metrics.bindAddress` | `:8080` (plaintext, no auth — chart ships a metrics Service; enable `networkPolicy.enabled` if needed) |
+| `metrics.bindAddress` | `:8080` (plaintext, no auth — chart ships a metrics Service; `networkPolicy.enabled` narrows by port, not by source) |
 | `metrics.service.enabled` | `true` |
-| `networkPolicy.enabled` | `false` |
+| `networkPolicy.enabled` | `true` |
 | `healthProbe.bindAddress` | `:8081` |
 
 **Important:** `evictionFailurePolicy: Fail` means if the webhook is down, **every `pods/eviction` CREATE is rejected** (cluster-wide), not only opted-in pods. That is intentional for safety. Use `Ignore` only if you accept cold drains during outages. Deployment annotation checks default to `Ignore` so rollouts are not blocked by a webhook outage.

@@ -87,7 +87,7 @@ func TestLiveAtRiskPodsScopesToWorkloadNodes(t *testing.T) {
 			Target: egv1a1.WorkloadReference{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "app", Name: "web"},
 		},
 	}
-	n, dying, err := liveAtRiskPods(context.Background(), c, win, policy)
+	n, dying, err := liveAtRiskPods(context.Background(), c, win, policy, dep)
 	if err != nil {
 		t.Fatal(err)
 	}

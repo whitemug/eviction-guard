@@ -27,7 +27,7 @@ Cross-namespace capacity mutation is **supported and intentional**: a protected 
 
 With `webhook.evictionFailurePolicy: Fail` (Helm default), a webhook outage rejects **every** `pods/eviction` CREATE cluster-wide until the webhook recovers — not only opted-in pods. That is intentional; do not set `Ignore` unless you accept cold drains during outages. Deployment annotation checks default to `Ignore`. See [docs/howto.md](docs/howto.md) and [docs/install.md](docs/install.md).
 
-The manager metrics endpoint (default `:8080`) is plaintext and unauthenticated. The Helm chart ships a metrics ClusterIP Service (`metrics.service.enabled`, default true). Restrict access with `networkPolicy.enabled=true` (or bind to localhost and scrape via a sidecar) on multi-tenant clusters.
+The manager metrics endpoint (default `:8080`) is plaintext and unauthenticated. The Helm chart ships a metrics ClusterIP Service (`metrics.service.enabled`, default true). `networkPolicy.enabled` (default true) only narrows ingress to the manager's own health/metrics/webhook ports — it does not restrict *who* can reach them, so the metrics endpoint remains scrapeable from any in-cluster pod. On multi-tenant clusters, bind metrics to localhost and scrape via a sidecar, or fork `networkpolicy.yaml` with a scoped `from:`, if you need real isolation.
 
 ## Webhook TLS expiry
 

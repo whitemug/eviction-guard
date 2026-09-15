@@ -140,7 +140,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	cap := policy.MaxConcurrentWindowsOrDefault()
+	windowCap := policy.MaxConcurrentWindowsOrDefault()
 	var deferred int32
 	var scaleErrs []error
 	for _, key := range sortedWorkloadKeys(workloads) {
@@ -151,7 +151,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		held := win != nil && win.IsActive()
 		waiting := !held || isDeferredWindow(win)
-		if waiting && cap > 0 && active >= cap {
+		if waiting && windowCap > 0 && active >= windowCap {
 			deferred++
 			if err := r.ensureDeferredWindow(ctx, policy, w); err != nil {
 				logger.Error(err, "deferred window failed", "deployment", w.deploy.Name, "namespace", w.deploy.Namespace)
@@ -179,7 +179,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if deferred > 0 {
 		emitf(r.Recorder, policy, corev1.EventTypeNormal, reasonWindowsCapped,
 			"%d workload(s) waiting for a window slot (active %d, maxConcurrentWindows %d)",
-			deferred, active, cap)
+			deferred, active, windowCap)
 	}
 	metrics.DeferredWorkloads.WithLabelValues(policy.Name).Set(float64(deferred))
 
@@ -229,6 +229,10 @@ func (r *PolicyReconciler) collectWorkloads(ctx context.Context, policy *egv1a1.
 	nsCache := map[string]labels.Set{}
 	// rsKey ("ns/rsName") → Deployment for this reconcile (avoids N+1 Gets).
 	ownerByRS := map[string]*appsv1.Deployment{}
+	// dep key ("ns/name") → ownership decision, so policyown.Owns (which walks
+	// every policy and recompiles selectors) runs once per Deployment even
+	// when many of its pods are at risk, not once per pod.
+	ownsByDep := map[string]bool{}
 	out := map[string]*workloadState{}
 	for _, n := range vulnerable {
 		pods, err := r.podsOnNode(ctx, n.Name)
@@ -250,14 +254,19 @@ func (r *PolicyReconciler) collectWorkloads(ctx context.Context, policy *egv1a1.
 			if !workloadProtected(dep, pod) {
 				continue
 			}
-			nsLabels, err := r.namespaceLabels(ctx, pod.Namespace, nsCache)
-			if err != nil {
-				return nil, err
+			key := dep.Namespace + "/" + dep.Name
+			owns, ok := ownsByDep[key]
+			if !ok {
+				nsLabels, err := r.namespaceLabels(ctx, pod.Namespace, nsCache)
+				if err != nil {
+					return nil, err
+				}
+				owns = policyown.Owns(policy, dep, nsLabels, all)
+				ownsByDep[key] = owns
 			}
-			if !policyown.Owns(policy, dep, nsLabels, all) {
+			if !owns {
 				continue
 			}
-			key := dep.Namespace + "/" + dep.Name
 			st, ok := out[key]
 			if !ok {
 				st = &workloadState{deploy: dep, nodes: map[string]struct{}{}}
@@ -274,15 +283,10 @@ func (r *PolicyReconciler) namespaceLabels(ctx context.Context, nsName string, c
 	if cached, ok := cache[nsName]; ok {
 		return cached, nil
 	}
-	ns := &corev1.Namespace{}
-	if err := r.Get(ctx, types.NamespacedName{Name: nsName}, ns); err != nil {
-		if apierrors.IsNotFound(err) {
-			cache[nsName] = labels.Set{}
-			return labels.Set{}, nil
-		}
+	set, err := workload.NamespaceLabels(ctx, r.Client, nsName)
+	if err != nil {
 		return nil, err
 	}
-	set := labels.Set(ns.Labels)
 	cache[nsName] = set
 	return set, nil
 }

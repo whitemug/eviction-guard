@@ -1,3 +1,12 @@
+{{- /*
+Port allow-list only — no "from" scoping. Health probes come from kubelet and
+the webhook port from the API server, neither reliably selectable via
+podSelector/namespaceSelector across clusters, so both stay open to any
+source. The metrics port is likewise open to any in-cluster source: this
+policy narrows which ports accept ingress, it does not restrict who may
+reach the metrics endpoint (still plaintext, unauthenticated — see
+SECURITY.md). Fork this template if you need source-scoped rules.
+*/ -}}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

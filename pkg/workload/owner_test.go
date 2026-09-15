@@ -60,3 +60,30 @@ func TestOwnerDeployment(t *testing.T) {
 		t.Fatalf("orphan got=%v err=%v, want nil", got, err)
 	}
 }
+
+func TestNamespaceLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Labels: map[string]string{"team": "payments"}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns).Build()
+
+	got, err := workload.NamespaceLabels(context.Background(), c, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["team"] != "payments" {
+		t.Fatalf("got=%v, want team=payments", got)
+	}
+
+	got, err = workload.NamespaceLabels(context.Background(), c, "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("missing namespace got=%v, want empty set", got)
+	}
+}

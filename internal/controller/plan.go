@@ -17,6 +17,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	egv1a1 "github.com/whitemug/eviction-guard/api/v1alpha1"
 	"github.com/whitemug/eviction-guard/pkg/backends"
@@ -69,13 +70,18 @@ func buildPlan(ctx context.Context, c client.Client, policy *egv1a1.EvictionGuar
 	}
 
 	for i, step := range resolved {
-		current, err := backends.Current(ctx, c, step.Target)
-		if err != nil {
-			return nil, err
-		}
-		baseline := current
+		// current is only needed to seed the baseline on first activation; once a
+		// baseline is already recorded on the Window, reuse it instead of a redundant
+		// Get on every reconcile (apply() reads the live value again when it patches).
+		var baseline int32
 		if old := findAction(existing, step.Key, step.Target); old != nil {
 			baseline = old.Baseline
+		} else {
+			current, err := backends.Current(ctx, c, step.Target)
+			if err != nil {
+				return nil, err
+			}
+			baseline = current
 		}
 		if i == 0 {
 			plan.primaryBaseline = baseline
@@ -142,7 +148,9 @@ func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName strin
 		for _, s := range group {
 			current, err := backends.Current(ctx, c, s.target)
 			if err != nil {
-				_ = compensateApply(ctx, c, applied)
+				if cErr := compensateApply(ctx, c, applied); cErr != nil {
+					log.FromContext(ctx).Error(cErr, "compensation after partial scale failure also failed", "policy", policyName)
+				}
 				return scaled, wrapBackendErr(s.target, err)
 			}
 			path := s.target.FieldPath
@@ -164,7 +172,9 @@ func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName strin
 		if len(values) > 0 {
 			base := group[0].target
 			if err := backends.PatchIntegers(ctx, c, base, paths, values); err != nil {
-				_ = compensateApply(ctx, c, applied)
+				if cErr := compensateApply(ctx, c, applied); cErr != nil {
+					log.FromContext(ctx).Error(cErr, "compensation after partial scale failure also failed", "policy", policyName)
+				}
 				return scaled, wrapBackendErr(base, err)
 			}
 			mutated = true
@@ -178,7 +188,9 @@ func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName strin
 				if mutated {
 					applied = append(applied, group)
 				}
-				_ = compensateApply(ctx, c, applied)
+				if cErr := compensateApply(ctx, c, applied); cErr != nil {
+					log.FromContext(ctx).Error(cErr, "compensation after partial scale failure also failed", "policy", policyName)
+				}
 				return scaled, wrapBackendErr(group[0].target, err)
 			}
 			mutated = true
@@ -193,41 +205,31 @@ func (p *scalePlan) apply(ctx context.Context, c client.Client, policyName strin
 
 // compensateApply best-effort restores groups successfully patched earlier in this
 // apply call (reverse order) so a mid-fan-out failure does not leave partial capacity.
+// Each group is converted to the same egv1a1.ScaleAction shape window-close restore
+// uses (restoreOneAction / restoreGroupedActions), so there is one implementation of
+// "only lower a path that actually needs it" instead of two that can drift apart.
 func compensateApply(ctx context.Context, c client.Client, groups [][]scaleStep) error {
 	var first error
 	for i := len(groups) - 1; i >= 0; i-- {
-		if err := restoreApplyGroup(ctx, c, groups[i]); err != nil && first == nil {
+		if err := restoreStepGroup(ctx, c, groups[i]); err != nil && first == nil {
 			first = err
 		}
 	}
 	return first
 }
 
-func restoreApplyGroup(ctx context.Context, c client.Client, group []scaleStep) error {
+func restoreStepGroup(ctx context.Context, c client.Client, group []scaleStep) error {
 	if len(group) == 0 {
 		return nil
 	}
-	target := group[0].target
-	var paths []string
-	values := map[string]int32{}
-	var stampKeys []string
-	for _, s := range group {
-		stampKeys = append(stampKeys, s.stampKeys...)
-		if s.skipDownscaling {
-			continue
-		}
-		paths = append(paths, s.target.FieldPath)
-		values[s.target.FieldPath] = s.baseline
+	actions := make([]egv1a1.ScaleAction, len(group))
+	for i, s := range group {
+		actions[i] = scaleAction(s.key, s.target, s.baseline, s.desired, s.stampKeys, s.skipDownscaling)
 	}
-	if len(values) > 0 {
-		if err := backends.PatchIntegers(ctx, c, target, paths, values); err != nil {
-			return wrapBackendErr(target, err)
-		}
+	if len(actions) == 1 {
+		return restoreOneAction(ctx, c, actions[0])
 	}
-	if err := backends.PatchAnnotations(ctx, c, target, backends.StampDeletes(uniqueStrings(stampKeys))); err != nil {
-		return wrapBackendErr(target, err)
-	}
-	return nil
+	return restoreGroupedActions(ctx, c, actions)
 }
 
 func sameScaleObject(a, b backends.Target) bool {
@@ -379,14 +381,6 @@ func restoreOneAction(ctx context.Context, c client.Client, a egv1a1.ScaleAction
 		return wrapBackendErr(target, err)
 	}
 	return nil
-}
-
-func workloadDeployment(ctx context.Context, c client.Client, ns, name string) (*appsv1.Deployment, error) {
-	dep := &appsv1.Deployment{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, dep); client.IgnoreNotFound(err) != nil {
-		return nil, err
-	}
-	return dep, nil
 }
 
 func backendLabel(dep *appsv1.Deployment, policy *egv1a1.EvictionGuardPolicy) string {

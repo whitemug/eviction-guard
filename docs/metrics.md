@@ -23,14 +23,14 @@ Workload-labeled gauges (`evg_at_risk_pods`, `evg_desired_replicas`, `evg_curren
 The chart exposes metrics on `metrics.bindAddress` / `metrics.port` (default `:8080`).
 
 - **`metrics.service.enabled`** (default **true**): ClusterIP Service `eviction-guard-metrics` targeting the manager pods — use as a Prometheus / ServiceMonitor scrape target.
-- **`networkPolicy.enabled`** (default **false**): when true, allows ingress only to health, metrics, and webhook ports. Enable on multi-tenant clusters; the metrics endpoint is plaintext and unauthenticated.
+- **`networkPolicy.enabled`** (default **true**): denies ingress to any port but health, metrics, and webhook. This is a port allow-list, not a source restriction — the metrics endpoint stays reachable from any in-cluster pod, still plaintext and unauthenticated. Disable only if your CNI does not enforce `NetworkPolicy` or you need another port open:
 
 ```bash
 helm upgrade --install eviction-guard ... \
-  --set networkPolicy.enabled=true
+  --set networkPolicy.enabled=false
 ```
 
-Or bind metrics to `127.0.0.1` and scrape via a sidecar ([SECURITY.md](../SECURITY.md)).
+For real source restriction, bind metrics to `127.0.0.1` and scrape via a sidecar, or fork the chart's `networkpolicy.yaml` with a scoped `from:` ([SECURITY.md](../SECURITY.md)).
 
 ## External autoscalers (KEDA)
 
