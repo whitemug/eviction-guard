@@ -1,0 +1,29 @@
+{{- $dest := .Destination -}}
+{{- $parsed := urls.Parse $dest -}}
+{{- $href := $dest -}}
+{{- $external := false -}}
+{{- if $parsed.IsAbs -}}
+  {{- $external = true -}}
+{{- else if hasPrefix $dest "#" -}}
+  {{- $href = $dest -}}
+{{- else -}}
+  {{- $path := $dest -}}
+  {{- $hash := "" -}}
+  {{- if strings.Contains $dest "#" -}}
+    {{- $path = index (split $dest "#") 0 -}}
+    {{- $hash = printf "#%s" (index (split $dest "#") 1) -}}
+  {{- end -}}
+  {{- if eq $path "" -}}
+    {{- $href = $hash -}}
+  {{- else -}}
+    {{- $repo := partial "repo-path.html" .Page -}}
+    {{- $joined := path.Clean (path.Join (path.Dir $repo) $path) -}}
+    {{- $resolved := partial "resolve-repo-path.html" $joined -}}
+    {{- if $resolved -}}
+      {{- $href = printf "%s%s" $resolved $hash -}}
+    {{- else -}}
+      {{- errorf "%s: unresolved link %q" $repo $dest -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+<a href="{{ $href }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if $external }} target="_blank" rel="noopener noreferrer"{{ end }}>{{ .Text | safeHTML }}</a>

@@ -12,7 +12,7 @@ keywords:
   - autoscaling
   - eviction
   - webhook
-home: https://github.com/whitemug/eviction-guard
+home: https://whitemug.github.io/eviction-guard/
 icon: https://raw.githubusercontent.com/whitemug/eviction-guard/main/docs/images/icon.svg
 sources:
   - https://github.com/whitemug/eviction-guard

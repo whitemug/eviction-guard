@@ -1,0 +1,5 @@
+{{- $p := printf "%s" . -}}
+{{- if hasPrefix $p "/" -}}
+  {{- $p = strings.TrimPrefix "/" $p -}}
+{{- end -}}
+{{- return ($p | relURL) -}}

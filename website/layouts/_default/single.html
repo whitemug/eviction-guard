@@ -1,0 +1,20 @@
+{{ define "main" }}
+<div class="doc">
+  {{ partial "sidebar.html" . }}
+  <article class="prose">
+    <div data-pagefind-body>
+      {{ .Content }}
+    </div>
+    <p class="edit" data-pagefind-ignore><a href="{{ site.Params.github }}/blob/main/{{ partial "repo-path.html" . }}">Edit on GitHub</a></p>
+    <div data-pagefind-ignore>
+      {{ partial "pager.html" . }}
+    </div>
+  </article>
+  <aside class="toc" data-pagefind-ignore>
+    {{- with .Fragments.Headings }}
+    <p class="side-label">On this page</p>
+    {{ $.TableOfContents }}
+    {{- end }}
+  </aside>
+</div>
+{{ end }}

@@ -1,0 +1,5 @@
+{{- $result := transform.HighlightCodeBlock . -}}
+<div class="codeblock">
+  <button type="button" class="copy" data-copy data-pagefind-ignore>Copy</button>
+  {{- $result.Wrapped -}}
+</div>

@@ -1,0 +1,14 @@
+<nav class="sidebar" aria-label="Documentation">
+  <p class="side-label">Guides</p>
+  <ul>
+    {{- range site.Menus.guides }}
+    <li><a href="{{ .URL | relURL }}"{{ if eq (.URL | relURL) $.RelPermalink }} aria-current="page"{{ end }}>{{ .Name }}</a></li>
+    {{- end }}
+  </ul>
+  <p class="side-label">Project</p>
+  <ul>
+    {{- range site.Menus.project }}
+    <li><a href="{{ .URL | relURL }}"{{ if eq (.URL | relURL) $.RelPermalink }} aria-current="page"{{ end }}>{{ .Name }}</a></li>
+    {{- end }}
+  </ul>
+</nav>

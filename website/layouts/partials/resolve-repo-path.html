@@ -1,0 +1,16 @@
+{{- $path := . -}}
+{{- $url := "" -}}
+{{- if eq $path "docs/README.md" -}}
+  {{- $url = partial "site-url.html" "/docs/" -}}
+{{- else if and (strings.HasPrefix $path "docs/") (strings.HasSuffix $path ".md") -}}
+  {{- $url = partial "site-url.html" (printf "/%s/" (strings.TrimSuffix ".md" $path)) -}}
+{{- else if strings.HasPrefix $path "examples/" -}}
+  {{- $url = partial "site-url.html" (printf "/%s" $path) -}}
+{{- else -}}
+  {{- range site.Params.repoFiles -}}
+    {{- if or (eq .repo $path) (eq .repo (printf "%s.md" $path)) -}}
+      {{- $url = partial "site-url.html" (printf "/%s/" (strings.TrimSuffix ".md" .content)) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- return $url -}}

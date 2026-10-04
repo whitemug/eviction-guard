@@ -1,5 +1,8 @@
 bin/
 dist/
+website/public/
+website/resources/
+website/.hugo_build.lock
 cover.out
 coverage.html
 *.out
