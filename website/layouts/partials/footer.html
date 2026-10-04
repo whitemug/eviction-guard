@@ -1,0 +1,20 @@
+<footer class="site-footer" data-pagefind-ignore>
+  <p>{{ site.Title }} {{ site.Params.version }} · API {{ site.Params.apiVersion }}</p>
+  <nav aria-label="Project">
+    <a href="{{ site.Params.github }}">GitHub</a>
+    <a href="{{ site.Params.discussions }}">Discussions</a>
+    <a href="{{ site.Params.artifacthub }}">Artifact Hub</a>
+    <a href="{{ partial "site-url.html" "/project/security/" }}">Security</a>
+    <a href="{{ partial "site-url.html" "/project/code-of-conduct/" }}">Code of Conduct</a>
+    <a href="{{ site.Params.github }}/blob/main/LICENSE">MIT License</a>
+  </nav>
+</footer>
+<dialog id="search-dialog" data-pagefind-ignore aria-label="Search documentation">
+  <form method="dialog">
+    <input id="search-input" type="search" placeholder="Search docs" aria-label="Search docs" autocomplete="off">
+  </form>
+  <ul id="search-results"></ul>
+  <p id="search-status" class="search-status" role="status"></p>
+</dialog>
+{{- $js := resources.Get "js/site.js" | minify | fingerprint -}}
+<script src="{{ $js.RelPermalink }}" integrity="{{ $js.Data.Integrity }}" defer></script>

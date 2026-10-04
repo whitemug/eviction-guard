@@ -1,0 +1,115 @@
+{{ define "main" }}
+<div class="home" data-pagefind-body>
+  <section class="hero wrap">
+    <p class="eyebrow">Kubernetes · voluntary node drains</p>
+    <h1>Spare capacity before the drain.</h1>
+    <p class="lede">Eviction Guard scales opted-in Deployments so replacement pods are Ready, then holds voluntary eviction until they are. One at-risk pod at a time, then it scales back.</p>
+    <p class="meta">
+      <a href="{{ partial "site-url.html" "/project/upgrading/" }}">{{ site.Params.version }}</a>
+      · API {{ site.Params.apiVersion }}
+      · alpha
+    </p>
+    <div class="codeblock install">
+      <div class="install-bar">
+        <span>Helm</span>
+        <button type="button" class="copy" data-copy data-pagefind-ignore>Copy</button>
+      </div>
+      <pre><code>{{- printf "helm install eviction-guard oci://ghcr.io/whitemug/charts/eviction-guard \\\n  --version %s \\\n  --namespace eviction-guard-system --create-namespace" site.Params.version -}}</code></pre>
+    </div>
+    <p class="fine">The chart does not create a policy. Opt in one Deployment, then apply <a href="{{ "examples/policy-spot.yaml" | relURL }}">examples/policy-spot.yaml</a> and <a href="{{ "examples/workload.yaml" | relURL }}">examples/workload.yaml</a>.</p>
+    <div class="codeblock">
+      <button type="button" class="copy" data-copy data-pagefind-ignore>Copy</button>
+      <pre><code>metadata:
+  annotations:
+    eviction-guard.io/scale-backend: deployment
+spec:
+  template:
+    metadata:
+      labels:
+        eviction-guard.io/protected: "true"</code></pre>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2 class="section-title">What happens on a drain</h2>
+    <ol class="steps">
+      <li>
+        <h3>Signal</h3>
+        <p>A Karpenter taint, cordon, or cloud notice matches a policy.</p>
+      </li>
+      <li>
+        <h3>Scale spare</h3>
+        <p>Opted-in Deployments gain pods that are Ready off the dying node.</p>
+      </li>
+      <li>
+        <h3>Hold eviction</h3>
+        <p>The webhook denies <code>pods/eviction</code> until that spare is Ready, then allows one at-risk pod.</p>
+      </li>
+      <li>
+        <h3>Scale back</h3>
+        <p>After a cooldown, capacity returns to baseline and the window closes.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section class="wrap">
+    <h2 class="section-title">Where this fits</h2>
+    <div class="table-scroll">
+      <table class="compare">
+        <thead>
+          <tr><th>Mechanism</th><th>What it guarantees</th><th>What it leaves open</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>PodDisruptionBudget</th>
+            <td>A floor of replicas survives</td>
+            <td>No spare. The replacement starts cold.</td>
+          </tr>
+          <tr>
+            <th>HorizontalPodAutoscaler</th>
+            <td>Scale follows load</td>
+            <td>It reacts after the error spike.</td>
+          </tr>
+          <tr class="us">
+            <th>Eviction Guard</th>
+            <td>Warm spare before eviction. The webhook sequences the drain.</td>
+            <td>Voluntary eviction only. Node disruption, not a crash.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="wrap split">
+    <div class="panel">
+      <h2>Opt-in, not a lock</h2>
+      <p><code>eviction-guard.io/protected: "true"</code> on the pod template does not block eviction. The webhook does, and only for workloads that also set <code>eviction-guard.io/scale-backend</code>.</p>
+      <p><a href="{{ partial "site-url.html" "/docs/configure/" }}">Configure a policy and a workload</a></p>
+    </div>
+    <div class="panel">
+      <h2>What it will not do</h2>
+      <ul>
+        <li>Replace per-app PodDisruptionBudgets</li>
+        <li>Protect against node crash, OOM, or a network partition</li>
+        <li>Schedule or place pods</li>
+        <li>See <code>kubectl delete pod</code> — that bypasses the Eviction API</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2 class="section-title">Guides</h2>
+    <ul class="cards">
+      {{- range first 4 site.Menus.guides }}
+      <li>
+        <a href="{{ .URL | relURL }}">
+          <strong>{{ .Name }}</strong>
+          <span>{{ .Params.blurb }}</span>
+        </a>
+      </li>
+      {{- end }}
+    </ul>
+    <p class="fine"><a href="{{ partial "site-url.html" "/docs/" }}">All guides</a></p>
+  </section>
+</div>
+{{ end }}

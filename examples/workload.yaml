@@ -1,11 +1,4 @@
-# Opt a Deployment into Eviction Guard via the protected pod label.
-# The pods/eviction webhook gates voluntary drain until a Ready spare exists,
-# then allows one at-risk pod at a time.
-#
-# scale-backend is required: list policy.spec.backends keys to patch.
-# Token order is patch order; the first key is the SpareReady primary.
-# No scaler? Use "deployment". HPA owns capacity? Prefer "hpa"
-# (see workload-hpa.yaml).
+# Opt in one Deployment. scale-backend: deployment patches spec.replicas.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -1,0 +1,10 @@
+{{- $path := "" -}}
+{{- with .File -}}
+  {{- $path = .Path -}}
+{{- end -}}
+{{- range site.Params.repoFiles -}}
+  {{- if eq .content $path -}}
+    {{- $path = .repo -}}
+  {{- end -}}
+{{- end -}}
+{{- return $path -}}

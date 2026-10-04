@@ -1,0 +1,39 @@
+{{- $cur := -1 -}}
+{{- $items := slice -}}
+{{- range site.Menus.guides -}}
+  {{- $items = $items | append . -}}
+{{- end -}}
+{{- $inGuides := false -}}
+{{- range $i, $item := $items -}}
+  {{- if eq ($item.URL | relURL) $.RelPermalink -}}
+    {{- $cur = $i -}}
+    {{- $inGuides = true -}}
+  {{- end -}}
+{{- end -}}
+{{- if not $inGuides -}}
+  {{- $items = slice -}}
+  {{- range site.Menus.project -}}
+    {{- $items = $items | append . -}}
+  {{- end -}}
+  {{- range $i, $item := $items -}}
+    {{- if eq ($item.URL | relURL) $.RelPermalink -}}
+      {{- $cur = $i -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if ge $cur 0 -}}
+<nav class="pager" aria-label="Pages">
+  {{- if gt $cur 0 -}}
+    {{- with index $items (sub $cur 1) -}}
+    <a class="prev" href="{{ .URL | relURL }}">{{ .Name }}</a>
+    {{- end -}}
+  {{- else -}}
+  <span></span>
+  {{- end -}}
+  {{- if lt (add $cur 1) (len $items) -}}
+    {{- with index $items (add $cur 1) -}}
+    <a class="next" href="{{ .URL | relURL }}">{{ .Name }}</a>
+    {{- end -}}
+  {{- end -}}
+</nav>
+{{- end -}}

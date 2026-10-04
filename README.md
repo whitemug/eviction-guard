@@ -14,6 +14,7 @@ A validating webhook on `pods/eviction` denies eviction of opted-in pods until s
 
 | | |
 |---|---|
+| **[Website](https://whitemug.github.io/eviction-guard/)** | Install command, guides, search |
 | **[What it does](docs/overview.md)** | Product model and non-goals |
 | **[Install](docs/install.md)** | Helm / Kustomize |
 | **[Configure](docs/configure.md)** | Policies, workloads, signals |

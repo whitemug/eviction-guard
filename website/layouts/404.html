@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  {{ partial "head.html" . }}
+</head>
+<body data-pagefind="{{ "pagefind/pagefind.js" | relURL }}">
+  <a class="skip" href="#content">Skip to content</a>
+  {{ partial "header.html" . }}
+  <main id="content" class="wrap missing">
+    <h1>That page is not here.</h1>
+    <p>The install command and the guides are on the <a href="{{ partial "site-url.html" "/" }}">home page</a>.</p>
+  </main>
+  {{ partial "footer.html" . }}
+</body>
+</html>

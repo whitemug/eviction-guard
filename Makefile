@@ -130,6 +130,33 @@ LOCALBIN ?= $(shell pwd)/bin
 localbin:
 	mkdir -p $(LOCALBIN)
 
+HUGO_VERSION ?= 0.139.4
+HUGO ?= $(LOCALBIN)/hugo
+ifeq ($(shell uname -s),Darwin)
+HUGO_DIST := darwin-universal
+else ifeq ($(shell uname -m),aarch64)
+HUGO_DIST := linux-arm64
+else ifeq ($(shell uname -m),arm64)
+HUGO_DIST := linux-arm64
+else
+HUGO_DIST := linux-amd64
+endif
+
+.PHONY: site
+site: $(HUGO) ## Build the docs site into website/public
+	cd website && $(HUGO) --minify
+	cd website && npx --yes pagefind@1.3.0 --site public
+
+.PHONY: site-serve
+site-serve: $(HUGO) ## Preview the docs site with search at http://127.0.0.1:1313
+	cd website && $(HUGO) --minify --baseURL http://127.0.0.1:1313/ && npx --yes pagefind@1.3.0 --site public && python3 -m http.server 1313 --bind 127.0.0.1 --directory public
+
+$(HUGO): | localbin
+	curl -fsSL -o $(LOCALBIN)/hugo.tar.gz https://github.com/gohugoio/hugo/releases/download/v$(HUGO_VERSION)/hugo_$(HUGO_VERSION)_$(HUGO_DIST).tar.gz
+	tar -xzf $(LOCALBIN)/hugo.tar.gz -C $(LOCALBIN) hugo
+	rm -f $(LOCALBIN)/hugo.tar.gz
+	chmod +x $(HUGO)
+
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN)
 $(CONTROLLER_GEN): | localbin

@@ -1,37 +1,30 @@
-# Watch only Spot nodes. A second policy can cover on-demand independently.
+# Spot nodes. This list is the built-in signals plus SpotInterrupted.
 apiVersion: eviction-guard.io/v1alpha1
 kind: EvictionGuardPolicy
 metadata:
   name: spot-workers
 spec:
   nodeFilter:
-    capacityTypes:
-      - spot
-    excludeLabelSelector:
-      matchLabels:
-        eviction-guard.io/ignore: "true"
+    capacityTypes: ["spot"]
   spareReplicas: 1
   maxBuffer: 4
-  maxConcurrentWindows: 8
-  # Fail-open if spare cannot land (e.g. already at HPA maxReplicas). Default is 2h.
+  # Default is 2h. Spot drains should fail open sooner.
   maxWindow: 15m
+  scaleBackAfter: 1m
+  disruptionSignals:
+    - KarpenterDisrupted
+    - KarpenterDeleteRequested
+    - OutOfService
+    - NodeCordoned
+    - SpotInterrupted
   backends:
     deployment:
       apiVersion: apps/v1
       kind: Deployment
       patches:
         - path: spec.replicas
-      # When also binding HPA: prefer scale-backend: hpa alone, or set
-      # skipDownscaling: true so EVG does not yank Deploy replicas on close.
     hpa:
       apiVersion: autoscaling/v1
       kind: HorizontalPodAutoscaler
       patches:
         - path: spec.minReplicas
-  scaleBackAfter: 1m
-  disruptionSignals:
-    - KarpenterDisrupted
-    - KarpenterDeleteRequested
-    - OutOfService
-    - SpotInterrupted
-    - NodeCordoned

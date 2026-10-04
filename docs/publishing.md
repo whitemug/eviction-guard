@@ -7,14 +7,13 @@ What is already in the tree versus what you do on GitHub when cutting a release 
 - MIT license, Contributor Covenant, CONTRIBUTING, SUPPORT, SECURITY, CHANGELOG, UPGRADING, MAINTAINERS, CODEOWNERS
 - Go module `github.com/whitemug/eviction-guard` (`api/v1alpha1`, `pkg/`)
 - CRDs, Helm chart (+ chart README), Kustomize package
-- CI: unit tests, envtest, golangci-lint, govulncheck, `helm lint` / `helm template`, `helm template | kubeconform`, kind e2e, Trivy image scan
+- CI: unit tests, envtest, golangci-lint, govulncheck, `helm lint` / `helm template`, `helm template | kubeconform`, kind e2e, Trivy image scan, docs site (`website/`)
 - Tag-driven release: GHCR image, Helm OCI chart, Trivy scan of the local amd64 image **before** push, SPDX SBOM (syft) attached to the GitHub Release, Cosign keyless signatures, GitHub Release from CHANGELOG
 - Dependabot: Go modules, Dockerfile, GitHub Actions
 
 ## Current release state
 
-Prefer **`v0.2.3`** (or newer) for public install — deferred disruption windows under `maxConcurrentWindows`, window-before-scale ordering, split `evictionFailurePolicy` / `deploymentFailurePolicy` / `policyFailurePolicy`, Helm metrics Service + NetworkPolicy (both **default on**), and chart default `replicaCount: 2` for webhook HA. Image and chart publish to GHCR and are Cosign-signed on tag.
-Artifacts may still be **private** on GHCR even when the git repo is public — flip package visibility separately.
+Prefer **`v0.2.3`** (or newer) for public install — deferred disruption windows under `maxConcurrentWindows`, window-before-scale ordering, split `evictionFailurePolicy` / `deploymentFailurePolicy` / `policyFailurePolicy`, Helm metrics Service + NetworkPolicy (both **default on**), and chart default `replicaCount: 2` for webhook HA. Image and chart on GHCR are public and Cosign-signed on tag.
 
 ## Go public
 
@@ -25,7 +24,19 @@ Artifacts may still be **private** on GHCR even when the git repo is public — 
    helm pull oci://ghcr.io/whitemug/charts/eviction-guard --version 0.2.3
    ```
 4. Protect `main`: require PR + CI checks (`test`, `image / trivy`, `e2e`, `e2e-backends`); block force-push/delete.
-5. Optional: Artifact Hub listing (chart already carries `artifacthub.io/*` annotations; `prerelease: true` while API is `v1alpha1`).
+5. List the chart on Artifact Hub (annotations are already on the chart; `prerelease: true` while the API is `v1alpha1`). Confirm the public install command pulls before announcing it.
+
+## Public site
+
+[karpenter.sh](https://karpenter.sh) is the reference for the shape: a homepage, a docs sidebar, search, and GitHub in the nav. This repo uses a small Hugo site in [`website/`](https://github.com/whitemug/eviction-guard/tree/main/website), with one docs version.
+
+`docs/` stays the source of truth. Hugo mounts those files (and the root project docs operators already link to) and fails the build when a relative link does not resolve. Maintainer notes stay out of the Guides list; they are under Project.
+
+The homepage carries the Helm install for `params.version`, the drain sequence, the PDB / HPA comparison, and the non-goals. One docs version. GitHub Pages serves `https://whitemug.github.io/eviction-guard/`.
+
+Preview: `make site-serve` (http://127.0.0.1:1313). That downloads Hugo 0.139.4 into `bin/` when it is not already there, then builds the Pagefind index so search works in the preview. `make site` is the GitHub Pages build: same Hugo config, production `baseURL`, then Pagefind. Search reads that static index in the browser. Hugo’s live-reload server is not used, because it would rebuild the HTML and drop the index.
+
+One-time: in the repo settings, set Pages → Build and deployment → Source to **GitHub Actions**. The `website` workflow builds on every pull request and deploys from `main`.
 
 ## Cut a new version
 
@@ -36,6 +47,7 @@ Example below uses **`v0.2.3`**; for a later cut, substitute the new version eve
    - `charts/eviction-guard/values.yaml` `image.tag`
    - `config/default/kustomization.yaml` `newTag` (keep samples aligned)
    - `CHANGELOG.md` + docs install examples
+   - `website/hugo.yaml` `params.version` (homepage install command)
 2. Merge to `main`, then tag:
    ```bash
    git checkout main && git pull

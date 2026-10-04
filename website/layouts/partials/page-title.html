@@ -1,0 +1,5 @@
+{{- $title := .Title -}}
+{{- with findRE `(?m)^# .+` .RawContent 1 -}}
+  {{- $title = strings.TrimSpace (replaceRE `^#\s+` "" (index . 0)) -}}
+{{- end -}}
+{{- return $title -}}

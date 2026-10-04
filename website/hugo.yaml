@@ -1,0 +1,171 @@
+baseURL: https://whitemug.github.io/eviction-guard/
+languageCode: en-us
+title: Eviction Guard
+enableRobotsTXT: true
+cleanDestinationDir: true
+
+disableKinds:
+  - taxonomy
+  - term
+  - RSS
+
+params:
+  version: "0.2.3"
+  apiVersion: v1alpha1
+  description: Scale spare capacity before Kubernetes voluntarily drains a node, then gate eviction until those pods are Ready.
+  github: https://github.com/whitemug/eviction-guard
+  discussions: https://github.com/whitemug/eviction-guard/discussions
+  artifacthub: https://artifacthub.io/packages/helm/eviction-guard/eviction-guard
+  # Repo-root files mounted under content/project. The page URL is the content path.
+  repoFiles:
+    - content: project/upgrading.md
+      repo: UPGRADING.md
+    - content: project/security.md
+      repo: SECURITY.md
+    - content: project/contributing.md
+      repo: CONTRIBUTING.md
+    - content: project/changelog.md
+      repo: CHANGELOG.md
+    - content: project/support.md
+      repo: SUPPORT.md
+    - content: project/code-of-conduct.md
+      repo: CODE_OF_CONDUCT.md
+    - content: project/maintainers.md
+      repo: MAINTAINERS
+
+menu:
+  guides:
+    - name: Overview
+      weight: 10
+      url: /docs/overview/
+      params:
+        blurb: What it does, and what it will not do
+    - name: Install
+      weight: 20
+      url: /docs/install/
+      params:
+        blurb: Helm, Kustomize, webhook HA
+    - name: Configure
+      weight: 30
+      url: /docs/configure/
+      params:
+        blurb: Policies, opt-in, signals, backends
+    - name: How-to
+      weight: 40
+      url: /docs/howto/
+      params:
+        blurb: Simulate a drain and read the gate
+    - name: Metrics
+      weight: 50
+      url: /docs/metrics/
+      params:
+        blurb: Prometheus gauges and counters
+    - name: KEDA
+      weight: 60
+      url: /docs/keda/
+      params:
+        blurb: Patch a ScaledObject, or scale from metrics
+    - name: GitOps
+      weight: 70
+      url: /docs/gitops/
+      params:
+        blurb: Keep Argo CD and Flux from reverting spare capacity
+    - name: Signals
+      weight: 80
+      url: /docs/signals/
+      params:
+        blurb: Built-in detectors and custom signal recipes
+  project:
+    - name: Upgrading
+      weight: 10
+      url: /project/upgrading/
+      params:
+        blurb: What changes between releases
+    - name: Extension
+      weight: 20
+      url: /docs/extension/
+      params:
+        blurb: CRDs and Go plugins for other operators
+    - name: Design
+      weight: 30
+      url: /docs/design/
+      params:
+        blurb: Architecture decisions for contributors
+    - name: Security
+      weight: 40
+      url: /project/security/
+      params:
+        blurb: Report a vulnerability
+    - name: Support
+      weight: 50
+      url: /project/support/
+      params:
+        blurb: Where to ask
+    - name: Contributing
+      weight: 60
+      url: /project/contributing/
+      params:
+        blurb: Dev setup and pull requests
+    - name: Changelog
+      weight: 70
+      url: /project/changelog/
+      params:
+        blurb: Release notes
+    - name: Publishing
+      weight: 80
+      url: /docs/publishing/
+      params:
+        blurb: Release, GHCR, and Cosign
+
+module:
+  mounts:
+    - source: content
+      target: content
+    - source: ../docs
+      target: content/docs
+      excludeFiles:
+        - images/**
+        - README.md
+    - source: ../docs/images
+      target: static/images
+    - source: ../UPGRADING.md
+      target: content/project/upgrading.md
+    - source: ../SECURITY.md
+      target: content/project/security.md
+    - source: ../CONTRIBUTING.md
+      target: content/project/contributing.md
+    - source: ../CHANGELOG.md
+      target: content/project/changelog.md
+    - source: ../SUPPORT.md
+      target: content/project/support.md
+    - source: ../CODE_OF_CONDUCT.md
+      target: content/project/code-of-conduct.md
+    - source: ../MAINTAINERS
+      target: content/project/maintainers.md
+    - source: ../examples
+      target: static/examples
+    - source: layouts
+      target: layouts
+    - source: assets
+      target: assets
+    - source: static
+      target: static
+
+markup:
+  tableOfContents:
+    startLevel: 2
+    endLevel: 3
+  goldmark:
+    parser:
+      autoHeadingID: true
+      autoHeadingIDType: github
+    renderer:
+      unsafe: false
+    renderHooks:
+      link:
+        # layouts/_default/_markup/render-link.html replaces the embedded hook only when this is true.
+        enableDefault: true
+  highlight:
+    style: github-dark
+    noClasses: true
+    guessSyntax: false
