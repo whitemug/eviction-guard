@@ -21,7 +21,7 @@ jobs:
         with:
           hugo-version: "0.139.4"
           extended: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - name: Build site
